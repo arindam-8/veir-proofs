@@ -133,6 +133,33 @@ instance : JoinSemilattice AbstractConstant where
   le_join_right := le_join_right
   join_le := join_le
 
+theorem join_self (a : AbstractConstant) : a ⊔ a = a := by
+  apply le_antisymm
+  · exact join_le a a a (le_refl a) (le_refl a)
+  · exact le_join_left a a
+
+theorem join_comm (a b : AbstractConstant) : a ⊔ b = b ⊔ a := by
+  apply le_antisymm
+  · exact join_le a b (b ⊔ a) (le_join_right b a) (le_join_left b a)
+  · exact join_le b a (a ⊔ b) (le_join_right a b) (le_join_left a b)
+
+theorem join_assoc (a b c : AbstractConstant) : (a ⊔ b) ⊔ c = a ⊔ (b ⊔ c) := by
+  apply le_antisymm
+  · exact join_le (a ⊔ b) c (a ⊔ (b ⊔ c))
+      (join_le a b (a ⊔ (b ⊔ c))
+        (le_join_left a (b ⊔ c))
+        (le_trans b (b ⊔ c) (a ⊔ (b ⊔ c))
+          (le_join_left b c) (le_join_right a (b ⊔ c))))
+      (le_trans c (b ⊔ c) (a ⊔ (b ⊔ c))
+        (le_join_right b c) (le_join_right a (b ⊔ c)))
+  · exact join_le a (b ⊔ c) ((a ⊔ b) ⊔ c)
+      (le_trans a (a ⊔ b) ((a ⊔ b) ⊔ c)
+        (le_join_left a b) (le_join_left (a ⊔ b) c))
+      (join_le b c ((a ⊔ b) ⊔ c)
+        (le_trans b (a ⊔ b) ((a ⊔ b) ⊔ c)
+          (le_join_right a b) (le_join_left (a ⊔ b) c))
+        (le_join_right (a ⊔ b) c))
+
 instance : AbstractDomain AbstractConstant ConcreteConstant where
   toJoinSemilattice := inferInstance
   toBoundedOrder := inferInstance
