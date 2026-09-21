@@ -95,6 +95,21 @@ theorem γ_monotone (a b : AbstractConstant) : a ≤ b → γ a ⊆ γ b := by
   cases a <;> cases b <;> simp [γ] at hab hx ⊢
   all_goals first | trivial | exact hx.trans hab
 
+@[simp]
+theorem γ_top_eq (x : ConcreteConstant) : x ∈ γ (.top : AbstractConstant) := by
+  change (γ (.top : AbstractConstant)) x
+  simp [γ]
+
+@[simp]
+theorem γ_bot_eq_empty : γ (.bottom : AbstractConstant) = (fun _ : ConcreteConstant => False) := by
+  ext x
+  simp [γ]
+
+@[simp]
+theorem γ_constant (c : ConcreteConstant) : γ (.constant c) = (fun x => x = c) := by
+  ext x
+  simp [γ]
+
 @[simp, grind .]
 theorem le_refl (a : AbstractConstant) : a ≤ a := by
   cases a <;> simp [le, le_def]
@@ -132,6 +147,23 @@ instance : JoinSemilattice AbstractConstant where
   le_join_left := le_join_left
   le_join_right := le_join_right
   join_le := join_le
+
+@[simp]
+theorem γ_join_left_subset (a b : AbstractConstant) : γ a ⊆ γ (a ⊔ b) := by
+  exact γ_monotone a (a ⊔ b) (le_join_left a b)
+
+@[simp]
+theorem γ_join_right_subset (a b : AbstractConstant) : γ b ⊆ γ (a ⊔ b) := by
+  exact γ_monotone b (a ⊔ b) (le_join_right a b)
+
+/-- The join is a sound over-approximation of either input fact. -/
+theorem γ_join_overapprox (a b : AbstractConstant) :
+    (∀ x, x ∈ γ a → x ∈ γ (a ⊔ b)) ∧ (∀ x, x ∈ γ b → x ∈ γ (a ⊔ b)) := by
+  constructor
+  · intro x hx
+    exact γ_join_left_subset a b hx
+  · intro x hx
+    exact γ_join_right_subset a b hx
 
 theorem join_self (a : AbstractConstant) : a ⊔ a = a := by
   apply le_antisymm
