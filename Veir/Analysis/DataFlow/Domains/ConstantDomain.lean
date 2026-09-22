@@ -165,6 +165,60 @@ theorem γ_join_overapprox (a b : AbstractConstant) :
   · intro x hx
     exact γ_join_right_subset a b hx
 
+/-- A concrete runtime integer value is represented exactly by the matching constant abstract value. -/
+theorem ofRuntimeValue_sound (v : RuntimeValue) :
+    match v with
+    | .int bitwidth value =>
+        (⟨bitwidth, value⟩ : ConcreteConstant) ∈ γ (AbstractConstant.ofRuntimeValue v)
+    | _ => True := by
+  cases v with
+  | int bitwidth value =>
+      change (⟨bitwidth, value⟩ : ConcreteConstant) = ⟨bitwidth, value⟩
+      rfl
+  | byte bitwidth value => trivial
+  | float type value => trivial
+  | addr value => trivial
+  | reg value => trivial
+  | felt fieldType value => trivial
+
+/-- The constant case of the concretization map is exactly the singleton set at that value. -/
+theorem γ_constant_eq_singleton (c : ConcreteConstant) :
+    γ (.constant c) = (fun x => x = c) := by
+  ext x
+  simp [γ]
+
+/-- A fold decision that returns a concrete constant is sound with respect to the abstract concretization. -/
+theorem ofFoldDecision_useConstant_sound
+    (v : RuntimeValue) (operands : Array AbstractConstant) :
+    match v with
+    | .int bitwidth value =>
+        (⟨bitwidth, value⟩ : ConcreteConstant) ∈
+          γ (AbstractConstant.ofFoldDecision (.useConstant v) operands)
+    | _ => True := by
+  cases v with
+  | int bitwidth value =>
+      change (⟨bitwidth, value⟩ : ConcreteConstant) = ⟨bitwidth, value⟩
+      rfl
+  | byte bitwidth value => trivial
+  | float type value => trivial
+  | addr value => trivial
+  | reg value => trivial
+  | felt fieldType value => trivial
+
+/-- A fold decision that reuses an operand is sound when that operand is itself sound. -/
+theorem ofFoldDecision_useOperand_sound
+    (operands : Array AbstractConstant) (index : Nat) :
+    match operands[index]? with
+    | some a =>
+        γ a = γ (AbstractConstant.ofFoldDecision (.useOperand index) operands)
+    | none =>
+        γ (⊤ : AbstractConstant) = γ (AbstractConstant.ofFoldDecision (.useOperand index) operands) := by
+  cases h : operands[index]? with
+  | none =>
+      simp [AbstractConstant.ofFoldDecision, h, γ]
+  | some a =>
+      simp [AbstractConstant.ofFoldDecision, h, γ]
+
 theorem join_self (a : AbstractConstant) : a ⊔ a = a := by
   apply le_antisymm
   · exact join_le a a a (le_refl a) (le_refl a)
