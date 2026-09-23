@@ -71,24 +71,57 @@ theorem FoldDecision.soundFor_fail (decision : FoldDecision) (operands : Array R
     (i : Nat) : decision.SoundFor operands .fail i := by
   simp [FoldDecision.SoundFor]
 
-/-- Sequencing a list of options succeeds only with the list of their contents. -/
-theorem List.getElem?_of_mapM_id_eq_some {α : Type} :
-    ∀ {xs : List (Option α)} {ys : List α}, xs.mapM id = some ys →
-      ∀ (i : Nat), xs[i]? = ys[i]?.map some
+/-- A successful `mapM` in `Option` computes each entry by `f`. -/
+theorem List.getElem?_of_mapM_eq_some {α β : Type} {f : α → Option β} :
+    ∀ {xs : List α} {ys : List β}, xs.mapM f = some ys →
+      ∀ (i : Nat), xs[i]?.bind f = ys[i]?
   | [], ys, h, i => by
       simp at h; subst h; simp
   | x :: xs, ys, h, i => by
-      cases x with
-      | none => simp at h
+      cases hx : f x with
+      | none => simp [hx] at h
       | some y =>
-        cases hRest : xs.mapM id with
-        | none => simp [hRest] at h
+        cases hRest : xs.mapM f with
+        | none => simp [hx, hRest] at h
         | some zs =>
-          simp [hRest] at h
+          simp [hx, hRest] at h
           subst h
           cases i with
-          | zero => simp
-          | succ i => simpa using List.getElem?_of_mapM_id_eq_some hRest i
+          | zero => simp [hx]
+          | succ i => simpa using List.getElem?_of_mapM_eq_some hRest i
+
+/-- A successful `mapM` in `Option` preserves length. -/
+theorem List.length_of_mapM_eq_some {α β : Type} {f : α → Option β} :
+    ∀ {xs : List α} {ys : List β}, xs.mapM f = some ys → ys.length = xs.length
+  | [], ys, h => by
+      simp at h; subst h; rfl
+  | x :: xs, ys, h => by
+      cases hx : f x with
+      | none => simp [hx] at h
+      | some y =>
+        cases hRest : xs.mapM f with
+        | none => simp [hx, hRest] at h
+        | some zs =>
+          simp [hx, hRest] at h
+          subst h
+          simp [List.length_of_mapM_eq_some hRest]
+
+/-- A successful `mapM` in `Option` preserves size. -/
+theorem Array.size_of_mapM_eq_some {α β : Type} {f : α → Option β}
+    {xs : Array α} {ys : Array β} (h : xs.mapM f = some ys) : ys.size = xs.size := by
+  have hList := congrArg (·.map Array.toList) h
+  simp only [Array.mapM_eq_mapM_toList, Functor.map, Option.map_map] at hList
+  simp at hList
+  simpa using List.length_of_mapM_eq_some hList
+
+/-- A successful `mapM` in `Option` computes each entry by `f`. -/
+theorem Array.getElem?_of_mapM_eq_some {α β : Type} {f : α → Option β}
+    {xs : Array α} {ys : Array β} (h : xs.mapM f = some ys) (i : Nat) :
+    xs[i]?.bind f = ys[i]? := by
+  have hList := congrArg (·.map Array.toList) h
+  simp only [Array.mapM_eq_mapM_toList, Functor.map, Option.map_map] at hList
+  simp at hList
+  simpa using List.getElem?_of_mapM_eq_some hList i
 
 /--
 When every entry of `constOperands` is known, and each agrees with `operands`,
@@ -100,23 +133,22 @@ theorem ConstOperandsAgree.mapM_id_eq
     (hSize : constOperands.size = operands.size)
     (hValues : constOperands.mapM id = some values) :
     values = operands := by
-  have hList := congrArg (·.map Array.toList) hValues
-  simp only [Array.mapM_eq_mapM_toList, Functor.map, Option.map_map] at hList
-  simp at hList
   apply Array.ext_getElem?
   intro i
-  have hEntry := List.getElem?_of_mapM_id_eq_some hList i
-  simp only [Array.getElem?_toList] at hEntry
+  have hEntry := Array.getElem?_of_mapM_eq_some hValues i
   cases hv : values[i]? with
   | none =>
+      have hValuesSize := Array.size_of_mapM_eq_some hValues
       have hLt : ¬ i < operands.size := by
         intro hLt
-        have : (constOperands[i]?).isSome := by simp; omega
-        simp [hEntry, hv] at this
+        have : i < values.size := by omega
+        simp [this] at hv
       simp [hLt]
   | some v =>
-      exact (hAgree i v (by simp [hEntry, hv])).symm
-
+      refine (hAgree i v ?_).symm
+      cases hc : constOperands[i]? with
+      | none => simp [hc, hv] at hEntry
+      | some c => simp_all
 
 /-- A successful `foldEvaluate` agrees with the empty-memory interpretation. -/
 theorem interpretPure_of_foldEvaluate_ok {opType : OpCode} {properties : propertiesOf opType}
@@ -183,5 +215,65 @@ private theorem foldByEvaluation_sound
         subst hDecisionEq
         simp [FoldDecision.valueFor]
         grind
+
+/--
+The `propagatesPoison` flag is honest for `opType`: whenever some operand is
+wholly poison, interpretation either fails, is UB, or produces wholly poison
+results of the declared types.
+
+This is the semantic content the flag asserts. It is a per-opcode obligation:
+nothing in `Veir/IR/OpInfo.lean` enforces it.
+-/
+def PropagatesPoisonHonestly (opType : OpCode) : Prop :=
+  opType.propagatesPoison = true →
+  ∀ (properties : propertiesOf opType) (resultTypes : Array TypeAttr)
+    (operands : Array RuntimeValue) (results : Array RuntimeValue),
+    operands.any RuntimeValue.isPoison = true →
+    interpretPure opType properties resultTypes operands = .ok results →
+    ∀ (i : Nat) (actual : RuntimeValue), results[i]? = some actual →
+      resultTypes[i]?.bind RuntimeValue.getPoisonForType = some actual
+
+/-- The poison leg: poison-propagating folds are sound when the flag is honest. -/
+private theorem foldPoisonedOperand_sound
+    (opType : OpCode) (properties : propertiesOf opType) (resultTypes : Array TypeAttr)
+    (operands : Array RuntimeValue) (constOperands : Array (Option RuntimeValue))
+    (decisions : Array FoldDecision) (i : Nat) (decision : FoldDecision)
+    (hHonest : PropagatesPoisonHonestly opType)
+    (hAgree : ConstOperandsAgree constOperands operands)
+    (hFold : foldPoisonedOperand opType resultTypes constOperands = some decisions)
+    (hDecision : decisions[i]? = some decision) :
+    decision.SoundFor operands (interpretPure opType properties resultTypes operands) i := by
+  simp only [foldPoisonedOperand] at hFold
+  simp [guard, Option.bind_eq_some_iff] at hFold
+  obtain ⟨hPropagates, ⟨j, hj, hPoison⟩, hFold⟩ := hFold
+  have hOperandPoison : operands.any RuntimeValue.isPoison = true := by
+    cases hc : constOperands[j] with
+    | none => simp [hc] at hPoison
+    | some value =>
+      simp only [hc] at hPoison
+      have hOp := hAgree j value (by simp [hj, hc])
+      obtain ⟨hjOp, hOpEq⟩ := Array.getElem?_eq_some_iff.mp hOp
+      exact Array.any_eq_true.mpr ⟨j, hjOp, by simp [hOpEq, hPoison]⟩
+  simp only [allResultsPoison, bind, Option.bind, pure] at hFold
+  cases hPoisons : resultTypes.mapM RuntimeValue.getPoisonForType with
+  | none => simp [hPoisons] at hFold
+  | some poisons =>
+    simp only [hPoisons, Option.some.injEq] at hFold
+    subst hFold
+    have hEntry := Array.getElem?_of_mapM_eq_some hPoisons i
+    simp only [Array.getElem?_map, Option.map_eq_some_iff] at hDecision
+    obtain ⟨poison, hPoisonAt, rfl⟩ := hDecision
+    cases hInterp : interpretPure opType properties resultTypes operands with
+    | fail => trivial
+    | ub => trivial
+    | ok results =>
+      simp only [FoldDecision.SoundFor]
+      cases hResult : results[i]? with
+      | none => trivial
+      | some actual =>
+        have := hHonest hPropagates properties resultTypes operands results hOperandPoison
+          hInterp i actual hResult
+        simp only [FoldDecision.valueFor]
+        rw [← this, hEntry, hPoisonAt]
 
 end Veir
