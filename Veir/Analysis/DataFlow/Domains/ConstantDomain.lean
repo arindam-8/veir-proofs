@@ -73,19 +73,6 @@ def ofFoldDecision
   | .useOperand index => operands[index]?.getD ⊤
   | .useConstant value => .ofRuntimeValue value
 
-/--
-When a fold decision is applied to concrete operands, this is the concrete
-result it is claiming to produce.  Non-integer runtime constants are outside
-the tracked constant domain, so they impose no constraint here.
--/
-def foldDecisionRealizes
-    (result : FoldDecision) (operands : Array ConcreteConstant)
-    (output : ConcreteConstant) : Prop :=
-  match result with
-  | .useOperand index => operands[index]? = some output
-  | .useConstant (.int bitwidth value) => output = ⟨bitwidth, value⟩
-  | .useConstant _ => True
-
 @[expose] def γ (absVal : AbstractConstant) : Set ConcreteConstant :=
   match absVal with
   | .top => fun _ => True
@@ -231,42 +218,6 @@ theorem ofFoldDecision_useOperand_sound
       simp [AbstractConstant.ofFoldDecision, h, γ]
   | some a =>
       simp [AbstractConstant.ofFoldDecision, h, γ]
-
-/--
-The abstract result of a fold contains every concrete result justified by the
-fold decision, provided the selected concrete operand is represented by its
-abstract operand fact.
--/
-theorem ofFoldDecision_realizes_sound
-    (result : FoldDecision) (abstractOperands : Array AbstractConstant)
-    (concreteOperands : Array ConcreteConstant) (output : ConcreteConstant)
-    (hOperands : ∀ (index : Nat) (c : ConcreteConstant) (a : AbstractConstant),
-      concreteOperands[index]? = some c →
-      abstractOperands[index]? = some a → c ∈ γ a)
-    (hRealizes : foldDecisionRealizes result concreteOperands output) :
-    output ∈ γ (ofFoldDecision result abstractOperands) := by
-  cases result with
-  | useOperand index =>
-      cases hAbstract : abstractOperands[index]? with
-      | none =>
-          have hTop : ofFoldDecision (.useOperand index) abstractOperands = ⊤ := by
-            simp [ofFoldDecision, hAbstract]
-          rw [hTop]
-          exact γ_top_eq output
-      | some a =>
-          have hConcrete : concreteOperands[index]? = some output := hRealizes
-          have hMem : output ∈ γ a := hOperands index output a hConcrete hAbstract
-          simpa [ofFoldDecision, hAbstract] using hMem
-  | useConstant value =>
-      cases value with
-      | int bitwidth value =>
-          change output = ⟨bitwidth, value⟩
-          exact hRealizes
-      | byte bitwidth value => trivial
-      | float type value => trivial
-      | addr value => trivial
-      | reg value => trivial
-      | felt fieldType value => trivial
 
 theorem join_self (a : AbstractConstant) : a ⊔ a = a := by
   apply le_antisymm
