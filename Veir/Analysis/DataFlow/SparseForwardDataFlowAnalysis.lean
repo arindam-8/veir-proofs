@@ -17,8 +17,9 @@ variable {kind : FactKind} {Domain : Type}
 -- and `DataFlowFramework.run`, are `partial def` and so have no equation lemmas to induct
 -- on. Lifting `SparseConstantPropagation.transfer_sound` to a fixpoint statement — every
 -- execution reaching a live SSA value is described by that value's final fact — requires
--- converting them to well-founded recursion first. That proof must also bridge the gap
--- between exact operand facts and refinement-sound result facts in `transfer_sound`.
+-- converting them to well-founded recursion first (or to `partial_fixpoint`, for partial
+-- correctness). `transfer_sound` relates operand and result facts by the same refinement
+-- relation, so it composes along an execution.
 variable [Bot Domain] [Join Domain] [DecidableEq Domain]
 
 /--

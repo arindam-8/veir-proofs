@@ -2,9 +2,13 @@ module
 
 public import Veir.Interfaces.FoldInterfaces
 public import Veir.Interpreter.Purity
+public import Veir.Interpreter.Refinement.Basic
 
 import all Veir.Interfaces.FoldInterfaces
 import all Veir.Interpreter.Evaluate
+import Veir.Interpreter.Refinement.Lemmas
+import all Veir.Data.LLVM.Int.Basic
+import all Veir.Data.Refinement
 
 /-!
 # Fold soundness contract
@@ -49,12 +53,11 @@ def ConstOperandsAgree (constOperands : Array (Option RuntimeValue))
 /--
 The fold-soundness contract for one result, as a refinement.
 
-Whenever the interpreter produces a value for result `i`, the decision must
-name a value that refines it: the same value, or anything at all if the
-interpreted value is wholly poison, since poison may be replaced by any value
-of its type. `.ub` and `.fail` impose no constraint: the source program's
-behaviour is unconstrained there, so replacing it with any value — poison
-included — is likewise a refinement.
+Whenever the interpreter produces a value `actual` for result `i`, the decision
+must name a value `claimed` that refines it (`actual ⊒ claimed`): the same value,
+or, where `actual` is poison, any value of its type. `.ub` and `.fail` impose no
+constraint: the source program's behaviour is unconstrained there, so replacing
+it with any value — poison included — is likewise a refinement.
 -/
 @[expose]
 def FoldDecision.SoundFor (decision : FoldDecision) (operands : Array RuntimeValue)
@@ -62,10 +65,15 @@ def FoldDecision.SoundFor (decision : FoldDecision) (operands : Array RuntimeVal
   match outcome with
   | .ok results =>
       match results[i]? with
-      | some actual => actual.isPoison = true ∨ decision.valueFor operands = some actual
+      | some actual => ∃ claimed, decision.valueFor operands = some claimed ∧ actual ⊒ claimed
       | none => True
   | .ub => True
   | .fail => True
+
+/-- An integer poison is refined by every integer of its width. -/
+theorem RuntimeValue.int_poison_isRefinedBy (w : Nat) (x : Data.LLVM.Int w) :
+    RuntimeValue.int w .poison ⊒ RuntimeValue.int w x :=
+  ⟨rfl, by simp [Data.LLVM.Int.cast, _root_.isRefinedBy]⟩
 
 @[simp]
 theorem FoldDecision.soundFor_ub (decision : FoldDecision) (operands : Array RuntimeValue)
@@ -280,7 +288,7 @@ private theorem foldPoisonedOperand_sound
       | some actual =>
         have := hHonest hPropagates properties resultTypes operands results hOperandPoison
           hInterp i actual hResult
-        right
+        refine ⟨actual, ?_, RuntimeValue.isRefinedBy_refl actual⟩
         simp only [FoldDecision.valueFor]
         rw [← this, hEntry, hPoisonAt]
 

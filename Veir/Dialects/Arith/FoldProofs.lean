@@ -7,6 +7,7 @@ import all Veir.Data.LLVM.Int.Basic
 import all Veir.Interpreter.Basic
 import all Veir.RuntimeValue.Basic
 import all Veir.GlobalOpInfo
+import Veir.Interpreter.Refinement.Lemmas
 
 /-!
 # Soundness of the `arith` fold table
@@ -107,7 +108,8 @@ theorem Arith.tryFold_sound
     rename_i w x
     by_cases hbw : bw = w
     · subst hbw
-      simp [Data.LLVM.Int.cast, Data.LLVM.Int.add_zero_eq, FoldDecision.valueFor]
+      simp [Data.LLVM.Int.cast, Data.LLVM.Int.add_zero_eq, FoldDecision.valueFor,
+        RuntimeValue.isRefinedBy_refl]
     · simp [hbw]
   case addui_extended =>
     obtain ⟨head, bw, hConst, rfl⟩ := Arith.tryFold_addui_extended_eq_some hFold
@@ -123,16 +125,18 @@ theorem Arith.tryFold_sound
       rcases i with _ | _ | i
       · simp at hDecision
         subst hDecision
-        simp [Data.LLVM.Int.cast, Data.LLVM.Int.add_zero_eq, FoldDecision.valueFor]
+        simp [Data.LLVM.Int.cast, Data.LLVM.Int.add_zero_eq, FoldDecision.valueFor,
+        RuntimeValue.isRefinedBy_refl]
       · simp at hDecision
         subst hDecision
         -- A poison `x` gives a poison flag, which the constant `0` refines.
         cases x with
         | poison =>
-          simp [Data.LLVM.Int.cast, Data.LLVM.Int.uaddOverflowFlag]
-          exact Or.inl rfl
+          simp [Data.LLVM.Int.cast, Data.LLVM.Int.uaddOverflowFlag, FoldDecision.valueFor]
+          exact RuntimeValue.int_poison_isRefinedBy 1 _
         | val bits =>
-          simp [Data.LLVM.Int.cast, Data.LLVM.Int.uaddOverflowFlag_zero, FoldDecision.valueFor]
+          simp [Data.LLVM.Int.cast, Data.LLVM.Int.uaddOverflowFlag_zero, FoldDecision.valueFor,
+            RuntimeValue.isRefinedBy_refl]
       · simp at hDecision
     · simp [hbw]
   all_goals simp [Arith.tryFold] at hFold

@@ -2,6 +2,12 @@ module
 
 public import Veir.Analysis.DataFlow.Domains.ConstantDomain
 public import Veir.Interpreter.Interp
+public import Veir.Interpreter.Refinement.Basic
+
+import Veir.Interpreter.Refinement.Lemmas
+public import Veir.Interpreter.Refinement.Basic
+
+import Veir.Interpreter.Refinement.Lemmas
 
 /-!
 # Soundness relation for the constant domain
@@ -33,16 +39,20 @@ def ofTrackedValue : RuntimeValue → Option ConcreteConstant
 
 /--
 `a.SoundForValue actual` says the abstract fact `a` is a sound claim about the
-runtime value `actual`, read as a refinement: a wholly poison value may be
-replaced by anything, so it accepts every fact; otherwise, a tracked value must
-lie in `γ a`, and an untracked one constrains nothing.
+runtime value `actual`, read as a refinement: `⊤` claims nothing, `⊥` claims the
+value does not exist, and `.constant c` claims that the integer `c` refines
+`actual` (`actual ⊒ .int c`). Since a poison integer is refined by any integer of
+its width, a wholly poison result accepts every constant claim of that width.
+
+The same relation is used for operands and results, which is what lets local
+transfer soundness compose along an execution.
 -/
 @[expose]
 def SoundForValue (a : AbstractConstant) (actual : RuntimeValue) : Prop :=
-  actual.isPoison = true ∨
-    match ofTrackedValue actual with
-    | some c => c ∈ γ a
-    | none => True
+  match a with
+  | .top => True
+  | .bottom => False
+  | .constant c => actual ⊒ .int c.bitwidth c.value
 
 /--
 `a.SoundFor outcome i` says the abstract fact `a` does not over-claim about
@@ -54,7 +64,7 @@ Only a successful interpretation constrains the fact:
 * `.fail` means the interpreter cannot model the operation, which likewise
   constrains nothing;
 * on `.ok`, the fact must be sound for the result in the refinement sense of
-  `SoundForValue`: poison results accept any fact.
+  `SoundForValue`.
 
 Note that `.ub` and `.fail` are justified differently. `.ub` is a semantic claim
 about the source program. `.fail` is a statement about VeIR's own coverage, so
@@ -72,21 +82,36 @@ def SoundFor (a : AbstractConstant) (outcome : Interp (Array RuntimeValue)) (i :
 
 @[simp]
 theorem soundForValue_top (actual : RuntimeValue) : SoundForValue ⊤ actual := by
-  right
-  cases ofTrackedValue actual with
-  | none => trivial
-  | some c => exact γ_top_eq c
+  trivial
 
 /-- A sound fact stays sound when weakened up the lattice. -/
 theorem soundForValue_mono (a b : AbstractConstant) (actual : RuntimeValue) (hab : a ≤ b) :
     SoundForValue a actual → SoundForValue b actual := by
-  rintro (hPoison | hTracked)
-  · exact Or.inl hPoison
-  · right
-    revert hTracked
-    cases ofTrackedValue actual with
-    | none => intro _; trivial
-    | some c => exact fun hc => γ_monotone a b hab hc
+  intro h
+  cases b with
+  | top => trivial
+  | bottom =>
+    -- only `⊥` is below `⊥`
+    have : a = .bottom := le_antisymm a .bottom hab (bot_le a)
+    subst this
+    exact h
+  | constant d =>
+    cases a with
+    | top => exact absurd (le_antisymm _ _ hab (le_top _)) (by simp)
+    | bottom => exact h.elim
+    | constant c =>
+      -- `γ (.constant c) ⊆ γ (.constant d)` forces `c = d`
+      have hcd : c = d := γ_monotone _ _ hab (show c ∈ γ (.constant c) from rfl)
+      subst hcd
+      exact h
+
+/-- Soundness is preserved when the actual value is itself refined away from. -/
+theorem soundForValue_of_isRefinedBy {a : AbstractConstant} {v v' : RuntimeValue}
+    (hRefines : v ⊒ v') (h : SoundForValue a v') : SoundForValue a v := by
+  cases a with
+  | top => trivial
+  | bottom => exact h.elim
+  | constant c => exact RuntimeValue.isRefinedBy_trans hRefines h
 
 @[simp]
 theorem soundFor_top (outcome : Interp (Array RuntimeValue)) (i : Nat) :
