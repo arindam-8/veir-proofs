@@ -16,6 +16,16 @@
 
 **Spec:** `Constant-propagation-analysis.tex` (sections "Properties that should be proved next" and "Recommended proof plan") and `CONSTANT-PROPAGATION-ANALYSIS.md` in the repository root.
 
+## Revision (2026-09-23): refinement semantics
+
+Both soundness relations were changed from exact equality to refinement (commit `fe1ab2f73`). The exact form rejected `arith.addui_extended x, 0`: the table folds the carry flag to `0` even when `x` is poison, where the interpreter's flag is poison. Poison may be refined to any value of its type, so the fold is correct, but it does not *equal* the interpreted value. Design discussion: https://claude.ai/code/artifact/6d7c6ec2-a4df-495a-a789-ff21f6bf160b
+
+- `FoldDecision.SoundFor` (Task 4): on `.ok`, `actual.isPoison = true ∨ decision.valueFor operands = some actual`.
+- `AbstractConstant.SoundFor` (Task 2): on `.ok`, delegates to the new `AbstractConstant.SoundForValue a actual := actual.isPoison = true ∨ (match ofTrackedValue actual with | some c => c ∈ γ a | none => True)`.
+- `PropagatesPoisonHonestly` (Task 5) is unchanged and still demands exact poison results.
+
+The code snippets in Tasks 2 and 4 below have been updated to match. Proof sketches elsewhere predate the change; the committed proofs are authoritative.
+
 ## Global Constraints
 
 - Every new `.lean` file under `Veir/` begins with `module`, then `public import` / `import` lines, then `public section`.
@@ -143,8 +153,8 @@ Only a successful interpretation constrains the fact:
 def SoundFor (a : AbstractConstant) (outcome : Interp (Array RuntimeValue)) (i : Nat) : Prop :=
   match outcome with
   | .ok results =>
-      match results[i]? >>= ofTrackedValue with
-      | some c => c ∈ γ a
+      match results[i]? with
+      | some actual => SoundForValue a actual
       | none => True
   | .ub => True
   | .fail => True
@@ -400,7 +410,7 @@ def FoldDecision.SoundFor (decision : FoldDecision) (operands : Array RuntimeVal
   match outcome with
   | .ok results =>
       match results[i]? with
-      | some actual => decision.valueFor operands = some actual
+      | some actual => actual.isPoison = true ∨ decision.valueFor operands = some actual
       | none => True
   | .ub => True
   | .fail => True
