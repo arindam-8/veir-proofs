@@ -32,6 +32,19 @@ def ofTrackedValue : RuntimeValue → Option ConcreteConstant
   | _ => none
 
 /--
+`a.SoundForValue actual` says the abstract fact `a` is a sound claim about the
+runtime value `actual`, read as a refinement: a wholly poison value may be
+replaced by anything, so it accepts every fact; otherwise, a tracked value must
+lie in `γ a`, and an untracked one constrains nothing.
+-/
+@[expose]
+def SoundForValue (a : AbstractConstant) (actual : RuntimeValue) : Prop :=
+  actual.isPoison = true ∨
+    match ofTrackedValue actual with
+    | some c => c ∈ γ a
+    | none => True
+
+/--
 `a.SoundFor outcome i` says the abstract fact `a` does not over-claim about
 result `i` of an operation whose interpretation produced `outcome`.
 
@@ -40,20 +53,40 @@ Only a successful interpretation constrains the fact:
   sound — this is what makes a UB-to-poison fold statable;
 * `.fail` means the interpreter cannot model the operation, which likewise
   constrains nothing;
-* a result outside the tracked integer domain constrains nothing.
+* on `.ok`, the fact must be sound for the result in the refinement sense of
+  `SoundForValue`: poison results accept any fact.
 
 Note that `.ub` and `.fail` are justified differently. `.ub` is a semantic claim
 about the source program. `.fail` is a statement about VeIR's own coverage, so
 soundness is relative to the operations the interpreter models.
 -/
+@[expose]
 def SoundFor (a : AbstractConstant) (outcome : Interp (Array RuntimeValue)) (i : Nat) : Prop :=
   match outcome with
   | .ok results =>
-      match results[i]? >>= ofTrackedValue with
-      | some c => c ∈ γ a
+      match results[i]? with
+      | some actual => SoundForValue a actual
       | none => True
   | .ub => True
   | .fail => True
+
+@[simp]
+theorem soundForValue_top (actual : RuntimeValue) : SoundForValue ⊤ actual := by
+  right
+  cases ofTrackedValue actual with
+  | none => trivial
+  | some c => exact γ_top_eq c
+
+/-- A sound fact stays sound when weakened up the lattice. -/
+theorem soundForValue_mono (a b : AbstractConstant) (actual : RuntimeValue) (hab : a ≤ b) :
+    SoundForValue a actual → SoundForValue b actual := by
+  rintro (hPoison | hTracked)
+  · exact Or.inl hPoison
+  · right
+    revert hTracked
+    cases ofTrackedValue actual with
+    | none => intro _; trivial
+    | some c => exact fun hc => γ_monotone a b hab hc
 
 @[simp]
 theorem soundFor_top (outcome : Interp (Array RuntimeValue)) (i : Nat) :
@@ -62,12 +95,10 @@ theorem soundFor_top (outcome : Interp (Array RuntimeValue)) (i : Nat) :
   | fail => trivial
   | ub => trivial
   | ok results =>
-      show match results[i]? >>= ofTrackedValue with
-        | some c => c ∈ γ (⊤ : AbstractConstant)
-        | none => True
-      cases results[i]? >>= ofTrackedValue with
+      simp only [SoundFor]
+      cases results[i]? with
       | none => trivial
-      | some c => exact γ_top_eq c
+      | some actual => exact soundForValue_top actual
 
 @[simp]
 theorem soundFor_ub (a : AbstractConstant) (i : Nat) :
@@ -86,15 +117,10 @@ theorem soundFor_mono (a b : AbstractConstant) (outcome : Interp (Array RuntimeV
   | fail => intro _; trivial
   | ub => intro _; trivial
   | ok results =>
-      show (match results[i]? >>= ofTrackedValue with
-              | some c => c ∈ γ a
-              | none => True) →
-           (match results[i]? >>= ofTrackedValue with
-              | some c => c ∈ γ b
-              | none => True)
-      cases results[i]? >>= ofTrackedValue with
+      simp only [SoundFor]
+      cases results[i]? with
       | none => intro _; trivial
-      | some c => exact fun hc => γ_monotone a b hab hc
+      | some actual => exact soundForValue_mono a b actual hab
 
 end AbstractConstant
 

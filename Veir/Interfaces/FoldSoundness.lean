@@ -25,6 +25,7 @@ public section
 namespace Veir
 
 /-- The runtime value a fold decision claims for a result. -/
+@[expose]
 def FoldDecision.valueFor (decision : FoldDecision) (operands : Array RuntimeValue)
     : Option RuntimeValue :=
   match decision with
@@ -32,6 +33,7 @@ def FoldDecision.valueFor (decision : FoldDecision) (operands : Array RuntimeVal
   | .useConstant value => some value
 
 /-- Interpret an operation at empty memory, keeping only the result values. -/
+@[expose]
 def interpretPure (opType : OpCode) (properties : propertiesOf opType)
     (resultTypes : Array TypeAttr) (operands : Array RuntimeValue)
     : Interp (Array RuntimeValue) :=
@@ -39,24 +41,28 @@ def interpretPure (opType : OpCode) (properties : propertiesOf opType)
     (fun (results, _, _) => results)
 
 /-- `constOperands` agrees with the real operands wherever it claims a value. -/
+@[expose]
 def ConstOperandsAgree (constOperands : Array (Option RuntimeValue))
     (operands : Array RuntimeValue) : Prop :=
   ∀ (i : Nat) (v : RuntimeValue), constOperands[i]? = some (some v) → operands[i]? = some v
 
 /--
-The fold-soundness contract for one result.
+The fold-soundness contract for one result, as a refinement.
 
-A decision must name the value the interpreter actually produces, whenever the
-interpreter produces one. `.ub` and `.fail` impose no constraint: the source
-program's behaviour is unconstrained there, so replacing it with any value —
-poison included — is a refinement rather than a claim about a value.
+Whenever the interpreter produces a value for result `i`, the decision must
+name a value that refines it: the same value, or anything at all if the
+interpreted value is wholly poison, since poison may be replaced by any value
+of its type. `.ub` and `.fail` impose no constraint: the source program's
+behaviour is unconstrained there, so replacing it with any value — poison
+included — is likewise a refinement.
 -/
+@[expose]
 def FoldDecision.SoundFor (decision : FoldDecision) (operands : Array RuntimeValue)
     (outcome : Interp (Array RuntimeValue)) (i : Nat) : Prop :=
   match outcome with
   | .ok results =>
       match results[i]? with
-      | some actual => decision.valueFor operands = some actual
+      | some actual => actual.isPoison = true ∨ decision.valueFor operands = some actual
       | none => True
   | .ub => True
   | .fail => True
@@ -224,6 +230,7 @@ results of the declared types.
 This is the semantic content the flag asserts. It is a per-opcode obligation:
 nothing in `Veir/IR/OpInfo.lean` enforces it.
 -/
+@[expose]
 def PropagatesPoisonHonestly (opType : OpCode) : Prop :=
   opType.propagatesPoison = true →
   ∀ (properties : propertiesOf opType) (resultTypes : Array TypeAttr)
@@ -273,6 +280,7 @@ private theorem foldPoisonedOperand_sound
       | some actual =>
         have := hHonest hPropagates properties resultTypes operands results hOperandPoison
           hInterp i actual hResult
+        right
         simp only [FoldDecision.valueFor]
         rw [← this, hEntry, hPoisonAt]
 
