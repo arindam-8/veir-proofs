@@ -188,11 +188,12 @@ The hypotheses:
 * `hConstSuccessors` — a constant-like operation has no successors, so the
   interpretation `ValuePtr.constantValue` runs agrees with `interpretPure`.
 
-Note the asymmetry: operand facts are read exactly, result facts only up to
-refinement. A result fact may claim a value where the execution produced poison
-(`arith.addui_extended x, 0` with poison `x`), and such a fact does not describe
-the value exactly. Chaining this theorem across operations therefore needs a
-refinement argument about the whole program, not a pointwise induction.
+On its own this theorem is asymmetric: operand facts are read exactly, result
+facts only up to refinement. A result fact may claim a value where the execution
+produced poison (`arith.addui_extended x, 0` with poison `x`), and such a fact
+does not describe the value exactly, so this theorem does not chain across
+operations. `transfer_sound` removes the asymmetry by relaxing the operands to
+refinement as well, via `interpretOp'_monotone`; use that theorem for composition.
 -/
 theorem transfer_sound_exact
     (op : OperationPtr) (irCtx : WfIRContext OpCode)
