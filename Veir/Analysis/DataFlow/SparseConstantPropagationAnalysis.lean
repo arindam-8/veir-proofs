@@ -54,163 +54,201 @@ def transfer
     | some results =>
       results.map fun result => AbstractConstant.ofFoldDecision result operandLatticeElements
     | none =>
-        Array.replicate numResults ⊤
+      Array.replicate numResults ⊤
 
   else
     Array.replicate numResults ⊤
 
 /--
-The result produced by a fold decision is sound with respect to the abstract
-concretization relation used by sparse constant propagation.
+An indexed fold result is abstractly sound whenever a concrete output is
+actually realized by the corresponding fold decision.
 -/
-theorem foldDecision_sound
-    (result : FoldDecision) (operandLatticeElements : Array AbstractConstant) :
-    match result with
-    | .useConstant v =>
-        match v with
-        | .int bitwidth value =>
-            (⟨bitwidth, value⟩ : ConcreteConstant) ∈
-              AbstractConstant.γ (AbstractConstant.ofFoldDecision result operandLatticeElements)
-        | _ => True
-    | .useOperand index =>
-        match operandLatticeElements[index]? with
-        | some a =>
-            AbstractConstant.γ a =
-              AbstractConstant.γ (AbstractConstant.ofFoldDecision result operandLatticeElements)
-        | none =>
-            AbstractConstant.γ (⊤ : AbstractConstant) =
-              AbstractConstant.γ (AbstractConstant.ofFoldDecision result operandLatticeElements) := by
-  cases result with
-  | useConstant v =>
-      cases v with
-      | int bitwidth value =>
-          change (⟨bitwidth, value⟩ : ConcreteConstant) = ⟨bitwidth, value⟩
-          rfl
-      | byte bitwidth value => trivial
-      | float type value => trivial
-      | addr value => trivial
-      | reg value => trivial
-      | felt fieldType value => trivial
-  | useOperand index =>
-      cases h : operandLatticeElements[index]? with
-      | none =>
-          simp [AbstractConstant.ofFoldDecision, h, AbstractConstant.γ]
-      | some a =>
-          simp [AbstractConstant.ofFoldDecision, h, AbstractConstant.γ]
+theorem foldResult_realizes_sound
+    (results : Array FoldDecision)
+    (abstractOperands : Array AbstractConstant)
+    (concreteOperands : Array ConcreteConstant)
+    (hOperands : ∀ (index : Nat) (c : ConcreteConstant) (a : AbstractConstant),
+      concreteOperands[index]? = some c →
+      abstractOperands[index]? = some a → c ∈ AbstractConstant.γ a)
+    (i : Nat) (result : FoldDecision) (output : ConcreteConstant)
+    (hResult : results[i]? = some result)
+    (hRealizes : AbstractConstant.foldDecisionRealizes result concreteOperands output) :
+    output ∈ AbstractConstant.γ
+      ((results.map (fun decision => AbstractConstant.ofFoldDecision decision abstractOperands))[i]?.getD ⊤) := by
+  have hDecision :
+      (results.map (fun decision => AbstractConstant.ofFoldDecision decision abstractOperands))[i]? =
+        some (AbstractConstant.ofFoldDecision result abstractOperands) := by
+    simp [hResult]
+  rw [hDecision]
+  simp only [Option.getD_some]
+  exact AbstractConstant.ofFoldDecision_realizes_sound result abstractOperands concreteOperands output
+    hOperands hRealizes
 
 /--
-The result array returned by the fold branch of the transfer function is sound:
-its entries are exactly the abstract facts obtained from the fold decisions.
+Concrete soundness of the successful fold branch of `transfer`. The
+`hRealizes` premise is the semantic obligation supplied by the concrete
+operation evaluator or by a dialect fold proof.
 -/
-theorem transfer_foldBranch_outputs_sound
-    (results : Array FoldDecision) (operandLatticeElements : Array AbstractConstant) :
-    ∀ i, i < results.size →
-      match results[i]? with
-      | some result =>
-          match result with
-          | .useConstant v =>
-              match v with
-              | .int bitwidth value =>
-                  (⟨bitwidth, value⟩ : ConcreteConstant) ∈
-                    AbstractConstant.γ (AbstractConstant.ofFoldDecision result operandLatticeElements)
-              | _ => True
-          | .useOperand index =>
-              match operandLatticeElements[index]? with
-              | some a =>
-                  AbstractConstant.γ a =
-                    AbstractConstant.γ (AbstractConstant.ofFoldDecision result operandLatticeElements)
-              | none =>
-                  AbstractConstant.γ (⊤ : AbstractConstant) =
-                    AbstractConstant.γ (AbstractConstant.ofFoldDecision result operandLatticeElements)
-      | none => True := by
-  intro i hi
-  cases hres : results[i]? with
-  | none => trivial
-  | some result =>
-      simpa [hres] using foldDecision_sound result operandLatticeElements
-
-/--
-The actual abstract value array produced by a fold result list is sound, elementwise.
--/
-theorem foldResultArray_sound
-    (results : Array FoldDecision) (operandLatticeElements : Array AbstractConstant) :
-    ∀ i, i < (results.map fun result => AbstractConstant.ofFoldDecision result operandLatticeElements).size →
-      match (results.map fun result => AbstractConstant.ofFoldDecision result operandLatticeElements)[i]? with
-      | some a =>
-          match a with
-          | .top => True
-          | .bottom => True
-          | .constant c => c ∈ AbstractConstant.γ a
-      | none => True := by
-  intro i hi
-  rcases h : (results.map fun result => AbstractConstant.ofFoldDecision result operandLatticeElements)[i]? with _ | a
-  · trivial
-  · cases a with
-    | top => trivial
-    | bottom => trivial
-    | constant c =>
-        change c = c
-        rfl
-
-/--
-Soundness of the fold-success branch of `transfer`: when no region/bottom/constant-like
-short-circuit happens, the folded abstract result is sound.
--/
-theorem transfer_foldCase_sound
-    (op : OperationPtr) (operandLatticeElements : Array AbstractConstant)
+theorem transfer_foldCase_realizes_sound
+    (op : OperationPtr)
+    (abstractOperands : Array AbstractConstant)
+    (concreteOperands : Array ConcreteConstant)
+    (hOperands : ∀ (index : Nat) (c : ConcreteConstant) (a : AbstractConstant),
+      concreteOperands[index]? = some c →
+      abstractOperands[index]? = some a → c ∈ AbstractConstant.γ a)
     (irCtx : WfIRContext OpCode) (opInBounds : op.InBounds irCtx.raw)
     (hRegions : op.getNumRegions! irCtx.raw = 0)
-    (hBot : ¬ operandLatticeElements.any (· = ⊥))
+    (hBot : ¬ abstractOperands.any (· = ⊥))
     (hConst : ¬ (op.getOpType! irCtx.raw).isConstantLike)
     (results : Array FoldDecision)
     (hFold : op.foldsTo irCtx opInBounds
-      (operandLatticeElements.map fun
+      (abstractOperands.map fun
         | .constant ⟨bitwidth, value⟩ => some (.int bitwidth value)
-        | _ => none) = some results) :
-    ∀ i, i < (transfer op operandLatticeElements irCtx).size →
-      match (transfer op operandLatticeElements irCtx)[i]? with
-      | some a =>
-          match a with
-          | .top => True
-          | .bottom => True
-          | .constant c => c ∈ AbstractConstant.γ a
-      | none => True := by
-  intro i hi
-  have hsz : (transfer op operandLatticeElements irCtx).size = results.size := by
+        | _ => none) = some results)
+    (i : Nat) (result : FoldDecision) (output : ConcreteConstant)
+    (hResult : results[i]? = some result)
+    (hRealizes : AbstractConstant.foldDecisionRealizes result concreteOperands output) :
+    output ∈ AbstractConstant.γ ((transfer op abstractOperands irCtx)[i]?.getD ⊤) := by
+  have hTransfer :
+      transfer op abstractOperands irCtx =
+        results.map (fun decision => AbstractConstant.ofFoldDecision decision abstractOperands) := by
     simp [transfer, hRegions, hBot, hConst, opInBounds, hFold]
-  have hi' : i < results.size := by simpa [hsz] using hi
-  have hmap : (results.map fun result => AbstractConstant.ofFoldDecision result operandLatticeElements).size = results.size := by
-    simp
-  have hi'' : i < (results.map fun result => AbstractConstant.ofFoldDecision result operandLatticeElements).size := by
-    simpa [hmap] using hi'
-  simpa [transfer, hRegions, hBot, hConst, opInBounds, hFold] using
-    (foldResultArray_sound results operandLatticeElements i hi'')
+  rw [hTransfer]
+  exact foldResult_realizes_sound results abstractOperands concreteOperands hOperands i result output
+    hResult hRealizes
 
 /--
-Full soundness of the sparse constant propagation transfer function.
-This theorem is the branch-by-branch proof that every result produced by
-`transfer` is a sound abstract fact.
+Array-level local soundness for the successful fold branch. This is the
+transfer theorem needed by the dataflow proof once the concrete evaluator has
+shown that each concrete result is realized by its corresponding fold
+decision.
 -/
-theorem transfer_sound
-    (op : OperationPtr) (operandLatticeElements : Array AbstractConstant)
-    (irCtx : WfIRContext OpCode) :
-    ∀ i, i < op.getNumResults! irCtx.raw →
-      match (transfer op operandLatticeElements irCtx)[i]? with
-      | some a =>
-          match a with
-          | .top => True
-          | .bottom => True
-          | .constant c => c ∈ AbstractConstant.γ a
-      | none => True := by
-  intro i hi
-  rcases hidx : (transfer op operandLatticeElements irCtx)[i]? with _ | a
-  · trivial
-  · cases a with
-    | top => trivial
-    | bottom => trivial
-    | constant c =>
-        change c = c
-        rfl
+theorem transfer_foldCase_concrete_sound
+    (op : OperationPtr)
+    (abstractOperands : Array AbstractConstant)
+    (concreteOperands : Array ConcreteConstant)
+    (hOperands : ∀ (index : Nat) (c : ConcreteConstant) (a : AbstractConstant),
+      concreteOperands[index]? = some c →
+      abstractOperands[index]? = some a → c ∈ AbstractConstant.γ a)
+    (irCtx : WfIRContext OpCode) (opInBounds : op.InBounds irCtx.raw)
+    (hRegions : op.getNumRegions! irCtx.raw = 0)
+    (hBot : ¬ abstractOperands.any (· = ⊥))
+    (hConst : ¬ (op.getOpType! irCtx.raw).isConstantLike)
+    (results : Array FoldDecision)
+    (hFold : op.foldsTo irCtx opInBounds
+      (abstractOperands.map fun
+        | .constant ⟨bitwidth, value⟩ => some (.int bitwidth value)
+        | _ => none) = some results)
+    (concreteResults : Array ConcreteConstant)
+    (hRealizes : ∀ (i : Nat) (output : ConcreteConstant),
+      concreteResults[i]? = some output →
+      ∃ result, results[i]? = some result ∧
+        AbstractConstant.foldDecisionRealizes result concreteOperands output) :
+    ∀ (i : Nat) (output : ConcreteConstant), concreteResults[i]? = some output →
+      output ∈ AbstractConstant.γ ((transfer op abstractOperands irCtx)[i]?.getD ⊤) := by
+  intro i output hOutput
+  obtain ⟨result, hResult, hDecision⟩ := hRealizes i output hOutput
+  exact transfer_foldCase_realizes_sound op abstractOperands concreteOperands hOperands irCtx opInBounds
+    hRegions hBot hConst results hFold i result output hResult hDecision
+
+/--
+Conditional concrete soundness of the complete constant-propagation transfer.
+For every concrete result, the theorem proves membership in the concretization
+of the abstract result returned by `transfer`.
+
+The hypotheses expose the semantic obligations that are not determined by the
+transfer definition itself:
+* `hOperands` says that any concrete operand paired with an abstract operand is
+  represented by that abstract fact;
+* `hConstantResults` identifies `constantResults` with the array used by the
+  constant-like branch;
+* `hBottomSound` says that no concrete result exists when an operand is bottom;
+* `hConstantSound` says that constant-like operation results belong to their
+  materialized abstract constants; and
+* `hFoldSound` says that every successful fold decision realizes its concrete
+  result.
+
+The region, failed-fold, and out-of-bounds branches need no semantic premise:
+they return `top`, which contains every tracked concrete value.
+-/
+theorem transfer_conditional_sound
+    (op : OperationPtr)
+    (abstractOperands : Array AbstractConstant)
+    (concreteOperands : Array ConcreteConstant)
+    (hOperands : ∀ (index : Nat) (c : ConcreteConstant) (a : AbstractConstant),
+      concreteOperands[index]? = some c →
+      abstractOperands[index]? = some a → c ∈ AbstractConstant.γ a)
+    (irCtx : WfIRContext OpCode)
+    (concreteResults : Array ConcreteConstant)
+    (constantResults : Array AbstractConstant)
+    (hConstantResults : constantResults = (op.getResults! irCtx.raw).map fun result =>
+      (result.constantValue irCtx.raw).map AbstractConstant.ofRuntimeValue |>.getD
+        (⊤ : AbstractConstant))
+    (hBottomSound : ∀ (hBot : abstractOperands.any (· = ⊥) = true)
+      (i : Nat) (output : ConcreteConstant),
+      concreteResults[i]? = some output → False)
+    (hConstantSound : ∀ (hConst : (op.getOpType! irCtx.raw).isConstantLike = true)
+      (i : Nat) (output : ConcreteConstant),
+      concreteResults[i]? = some output →
+      output ∈ AbstractConstant.γ (constantResults[i]?.getD (⊤ : AbstractConstant)))
+    (hFoldSound : ∀ (results : Array FoldDecision) (i : Nat) (output : ConcreteConstant),
+      op.getNumRegions! irCtx.raw = 0 →
+      ¬ abstractOperands.any (· = ⊥) →
+      ¬ (op.getOpType! irCtx.raw).isConstantLike →
+      (opInBounds : op.InBounds irCtx.raw) →
+      op.foldsTo irCtx opInBounds
+        (abstractOperands.map fun
+          | .constant ⟨bitwidth, value⟩ => some (.int bitwidth value)
+          | _ => none) = some results →
+      concreteResults[i]? = some output →
+      ∃ result, results[i]? = some result ∧
+        AbstractConstant.foldDecisionRealizes result concreteOperands output) :
+    ∀ (i : Nat) (output : ConcreteConstant), concreteResults[i]? = some output →
+      output ∈ AbstractConstant.γ ((transfer op abstractOperands irCtx)[i]?.getD ⊤) := by
+  intro i output hOutput
+  by_cases hRegions : op.getNumRegions! irCtx.raw ≠ 0
+  · have hTop : ((Array.replicate (op.getNumResults! irCtx.raw) ⊤)[i]?.getD
+      (⊤ : AbstractConstant)) = ⊤ := by
+      rw [Array.getElem?_replicate]
+      split <;> rfl
+    rw [show transfer op abstractOperands irCtx = Array.replicate (op.getNumResults! irCtx.raw) ⊤ by
+      simp [transfer, hRegions]]
+    rw [hTop]
+    exact AbstractConstant.γ_top_eq output
+  · have hRegions0 : op.getNumRegions! irCtx.raw = 0 := by simpa using hRegions
+    by_cases hBot : abstractOperands.any (· = ⊥)
+    · exact False.elim (hBottomSound hBot i output hOutput)
+    · by_cases hConst : ((op.getOpType! irCtx.raw).isConstantLike = true)
+      · simpa [transfer, hRegions0, hBot, hConst, hConstantResults] using
+          hConstantSound hConst i output hOutput
+      · by_cases hInBounds : op.InBounds irCtx.raw
+        · let constOperands :=
+            abstractOperands.map fun
+              | .constant ⟨bitwidth, value⟩ => some (RuntimeValue.int bitwidth value)
+              | _ => none
+          cases hFold : op.foldsTo irCtx hInBounds constOperands with
+          | none =>
+              have hTop : ((Array.replicate (op.getNumResults! irCtx.raw) ⊤)[i]?.getD
+                  (⊤ : AbstractConstant)) = ⊤ := by
+                rw [Array.getElem?_replicate]
+                split <;> rfl
+              rw [show transfer op abstractOperands irCtx = Array.replicate (op.getNumResults! irCtx.raw) ⊤ by
+                simp [transfer, hRegions0, hBot, hConst, hInBounds, hFold, constOperands]]
+              rw [hTop]
+              exact AbstractConstant.γ_top_eq output
+          | some results =>
+              exact transfer_foldCase_concrete_sound op abstractOperands concreteOperands hOperands
+                irCtx hInBounds hRegions0 hBot hConst results hFold concreteResults
+                (fun j result hResult => hFoldSound results j result hRegions0 hBot hConst
+                  hInBounds hFold hResult) i output hOutput
+        · have hTop : ((Array.replicate (op.getNumResults! irCtx.raw) ⊤)[i]?.getD
+              (⊤ : AbstractConstant)) = ⊤ := by
+            rw [Array.getElem?_replicate]
+            split <;> rfl
+          rw [show transfer op abstractOperands irCtx = Array.replicate (op.getNumResults! irCtx.raw) ⊤ by
+            simp [transfer, hRegions0, hBot, hConst, hInBounds]]
+          rw [hTop]
+          exact AbstractConstant.γ_top_eq output
 
 
 end SparseConstantPropagation
