@@ -6,6 +6,7 @@ import all Veir.Dialects.Arith.OpInfo
 import all Veir.Data.LLVM.Int.Basic
 import all Veir.Interpreter.Basic
 import all Veir.RuntimeValue.Basic
+import all Veir.GlobalOpInfo
 
 /-!
 # Soundness of the `arith` fold table
@@ -135,5 +136,11 @@ theorem Arith.tryFold_sound
       · simp at hDecision
     · simp [hbw]
   all_goals simp [Arith.tryFold] at hFold
+
+/-- The `arith` fold table satisfies the fold-soundness contract. -/
+theorem Arith.foldTableSound (op : Veir.Arith) : FoldTableSound (.arith op) := by
+  intro properties resultTypes operands constOperands decisions i decision hAgree hFold hDecision
+  exact Arith.tryFold_sound op properties resultTypes operands constOperands decisions i decision
+    hAgree hFold hDecision
 
 end Veir

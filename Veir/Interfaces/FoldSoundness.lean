@@ -284,4 +284,68 @@ private theorem foldPoisonedOperand_sound
         simp only [FoldDecision.valueFor]
         rw [← this, hEntry, hPoisonAt]
 
+/--
+The dialect fold table for `opType` satisfies the contract.
+
+This is a per-dialect obligation. It is discharged for `arith` by
+`Arith.tryFold_sound` in `Veir/Dialects/Arith/FoldProofs.lean`, and is open for
+`llvm` and `riscv`, the other dialects that override `tryFold`.
+-/
+@[expose]
+def FoldTableSound (opType : OpCode) : Prop :=
+  ∀ (properties : propertiesOf opType) (resultTypes : Array TypeAttr)
+    (operands : Array RuntimeValue) (constOperands : Array (Option RuntimeValue))
+    (decisions : Array FoldDecision) (i : Nat) (decision : FoldDecision),
+    ConstOperandsAgree constOperands operands →
+    HasOpInfo.tryFold opType properties resultTypes constOperands = some decisions →
+    decisions[i]? = some decision →
+    decision.SoundFor operands (interpretPure opType properties resultTypes operands) i
+
+/-- `preferredFold` returns one of its two arguments unchanged. -/
+private theorem preferredFold_eq (first second : Option (Array FoldDecision)) :
+    preferredFold first second = first ∨ preferredFold first second = second := by
+  unfold preferredFold
+  split
+  · exact Or.inr rfl
+  · exact Or.inl rfl
+
+/--
+Fold soundness for `OpCode.foldsTo`: every decision it returns refines the
+value the interpreter produces, whenever the interpreter produces one.
+
+`hTable` and `hHonest` are the per-opcode obligations of the dialect fold table
+and of the `propagatesPoison` flag. `hAgree` and `hSize` say the constant
+operands the caller supplies describe the real operands.
+-/
+theorem foldsTo_sound
+    (opType : OpCode) (properties : propertiesOf opType) (resultTypes : Array TypeAttr)
+    (operands : Array RuntimeValue) (constOperands : Array (Option RuntimeValue))
+    (decisions : Array FoldDecision) (i : Nat) (decision : FoldDecision)
+    (hTable : FoldTableSound opType)
+    (hHonest : PropagatesPoisonHonestly opType)
+    (hAgree : ConstOperandsAgree constOperands operands)
+    (hSize : constOperands.size = operands.size)
+    (hFold : OpCode.foldsTo opType properties resultTypes constOperands = some decisions)
+    (hDecision : decisions[i]? = some decision) :
+    decision.SoundFor operands (interpretPure opType properties resultTypes operands) i := by
+  simp only [OpCode.foldsTo] at hFold
+  cases hPoison : foldPoisonedOperand opType resultTypes constOperands with
+  | some poisonDecisions =>
+    have hEq : decisions = poisonDecisions := by
+      cases hConst : opType.isConstantLike <;> simp_all [guard, bind, Option.bind]
+    subst hEq
+    exact foldPoisonedOperand_sound opType properties resultTypes operands constOperands
+      decisions i decision hHonest hAgree hPoison hDecision
+  | none =>
+    have hPreferred : preferredFold (foldByTable opType properties resultTypes constOperands)
+        (foldByEvaluation opType properties resultTypes constOperands) = some decisions := by
+      cases hConst : opType.isConstantLike <;> simp_all [guard, bind, Option.bind]
+    rcases preferredFold_eq (foldByTable opType properties resultTypes constOperands)
+        (foldByEvaluation opType properties resultTypes constOperands) with h | h <;>
+      rw [h] at hPreferred
+    · exact hTable properties resultTypes operands constOperands decisions i decision
+        hAgree hPreferred hDecision
+    · exact foldByEvaluation_sound opType properties resultTypes operands constOperands
+        decisions i decision hAgree hSize hPreferred hDecision
+
 end Veir
