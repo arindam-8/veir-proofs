@@ -12,7 +12,13 @@ namespace SparseForwardDataFlowAnalysis
 
 variable {kind : FactKind} {Domain : Type}
 
--- TODO: When this is verified, we will need something stronger than this for `Domain`
+-- TODO: When this is verified, we will need something stronger than this for `Domain`.
+-- Verification is currently blocked: `visitOperation` and `initializeRecursively` below,
+-- and `DataFlowFramework.run`, are `partial def` and so have no equation lemmas to induct
+-- on. Lifting `SparseConstantPropagation.transfer_sound` to a fixpoint statement — every
+-- execution reaching a live SSA value is described by that value's final fact — requires
+-- converting them to well-founded recursion first. That proof must also bridge the gap
+-- between exact operand facts and refinement-sound result facts in `transfer_sound`.
 variable [Bot Domain] [Join Domain] [DecidableEq Domain]
 
 /--
