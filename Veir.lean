@@ -28,7 +28,7 @@ import Veir.Passes.CastsReconciliation.Reconciliation
 import Veir.Passes.Legalization.Proofs
 
 -- FIXME: These modules are otherwise orphans and would not be compiled.
-import Veir.Interfaces.FoldSoundness
+import Veir.Dialects.Arith.FoldProofs
 import Veir.Analysis.DataFlow.SparseFact
 import Veir.Analysis.DataFlow.SparseForwardDataFlowAnalysis
 import Veir.Data.FP.EScientificBV
