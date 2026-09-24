@@ -231,7 +231,7 @@ private theorem foldByEvaluation_sound
         grind
 
 /--
-The `propagatesPoison` flag is honest for `opType`: whenever some operand is
+The `propagatesPoison` flag is sound for `opType`: whenever some operand is
 wholly poison, interpretation either fails, is UB, or produces wholly poison
 results of the declared types.
 
@@ -239,7 +239,7 @@ This is the semantic content the flag asserts. It is a per-opcode obligation:
 nothing in `Veir/IR/OpInfo.lean` enforces it.
 -/
 @[expose]
-def PropagatesPoisonHonestly (opType : OpCode) : Prop :=
+def PropagatesPoisonSound (opType : OpCode) : Prop :=
   opType.propagatesPoison = true →
   ∀ (properties : propertiesOf opType) (resultTypes : Array TypeAttr)
     (operands : Array RuntimeValue) (results : Array RuntimeValue),
@@ -248,27 +248,30 @@ def PropagatesPoisonHonestly (opType : OpCode) : Prop :=
     ∀ (i : Nat) (actual : RuntimeValue), results[i]? = some actual →
       resultTypes[i]?.bind RuntimeValue.getPoisonForType = some actual
 
-/-- The poison leg: poison-propagating folds are sound when the flag is honest. -/
+/--
+The poison leg: poison-propagating folds are sound, given that the
+`propagatesPoison` flag is (`PropagatesPoisonSound`).
+-/
 private theorem foldPoisonedOperand_sound
     (opType : OpCode) (properties : propertiesOf opType) (resultTypes : Array TypeAttr)
     (operands : Array RuntimeValue) (constOperands : Array (Option RuntimeValue))
     (decisions : Array FoldDecision) (i : Nat) (decision : FoldDecision)
-    (hHonest : PropagatesPoisonHonestly opType)
+    (hPoison : PropagatesPoisonSound opType)
     (hAgree : ConstOperandsAgree constOperands operands)
     (hFold : foldPoisonedOperand opType resultTypes constOperands = some decisions)
     (hDecision : decisions[i]? = some decision) :
     decision.SoundFor operands (interpretPure opType properties resultTypes operands) i := by
   simp only [foldPoisonedOperand] at hFold
   simp [guard, Option.bind_eq_some_iff] at hFold
-  obtain ⟨hPropagates, ⟨j, hj, hPoison⟩, hFold⟩ := hFold
+  obtain ⟨hPropagates, ⟨j, hj, hConstPoison⟩, hFold⟩ := hFold
   have hOperandPoison : operands.any RuntimeValue.isPoison = true := by
     cases hc : constOperands[j] with
-    | none => simp [hc] at hPoison
+    | none => simp [hc] at hConstPoison
     | some value =>
-      simp only [hc] at hPoison
+      simp only [hc] at hConstPoison
       have hOp := hAgree j value (by simp [hj, hc])
       obtain ⟨hjOp, hOpEq⟩ := Array.getElem?_eq_some_iff.mp hOp
-      exact Array.any_eq_true.mpr ⟨j, hjOp, by simp [hOpEq, hPoison]⟩
+      exact Array.any_eq_true.mpr ⟨j, hjOp, by simp [hOpEq, hConstPoison]⟩
   simp only [allResultsPoison, bind, Option.bind, pure] at hFold
   cases hPoisons : resultTypes.mapM RuntimeValue.getPoisonForType with
   | none => simp [hPoisons] at hFold
@@ -286,7 +289,7 @@ private theorem foldPoisonedOperand_sound
       cases hResult : results[i]? with
       | none => trivial
       | some actual =>
-        have := hHonest hPropagates properties resultTypes operands results hOperandPoison
+        have := hPoison hPropagates properties resultTypes operands results hOperandPoison
           hInterp i actual hResult
         refine ⟨actual, ?_, RuntimeValue.isRefinedBy_refl actual⟩
         simp only [FoldDecision.valueFor]
@@ -321,7 +324,7 @@ private theorem preferredFold_eq (first second : Option (Array FoldDecision)) :
 Fold soundness for `OpCode.foldsTo`: every decision it returns refines the
 value the interpreter produces, whenever the interpreter produces one.
 
-`hTable` and `hHonest` are the per-opcode obligations of the dialect fold table
+`hTable` and `hPoison` are the per-opcode obligations of the dialect fold table
 and of the `propagatesPoison` flag. `hAgree` and `hSize` say the constant
 operands the caller supplies describe the real operands.
 -/
@@ -330,20 +333,20 @@ theorem foldsTo_sound
     (operands : Array RuntimeValue) (constOperands : Array (Option RuntimeValue))
     (decisions : Array FoldDecision) (i : Nat) (decision : FoldDecision)
     (hTable : FoldTableSound opType)
-    (hHonest : PropagatesPoisonHonestly opType)
+    (hPoison : PropagatesPoisonSound opType)
     (hAgree : ConstOperandsAgree constOperands operands)
     (hSize : constOperands.size = operands.size)
     (hFold : OpCode.foldsTo opType properties resultTypes constOperands = some decisions)
     (hDecision : decisions[i]? = some decision) :
     decision.SoundFor operands (interpretPure opType properties resultTypes operands) i := by
   simp only [OpCode.foldsTo] at hFold
-  cases hPoison : foldPoisonedOperand opType resultTypes constOperands with
+  cases hPoisonFold : foldPoisonedOperand opType resultTypes constOperands with
   | some poisonDecisions =>
     have hEq : decisions = poisonDecisions := by
       cases hConst : opType.isConstantLike <;> simp_all [guard, bind, Option.bind]
     subst hEq
     exact foldPoisonedOperand_sound opType properties resultTypes operands constOperands
-      decisions i decision hHonest hAgree hPoison hDecision
+      decisions i decision hPoison hAgree hPoisonFold hDecision
   | none =>
     have hPreferred : preferredFold (foldByTable opType properties resultTypes constOperands)
         (foldByEvaluation opType properties resultTypes constOperands) = some decisions := by

@@ -22,7 +22,7 @@ Both soundness relations were changed from exact equality to refinement (commit 
 
 - `FoldDecision.SoundFor` (Task 4): on `.ok`, `actual.isPoison = true ∨ decision.valueFor operands = some actual`.
 - `AbstractConstant.SoundFor` (Task 2): on `.ok`, delegates to a per-value relation, now `AbstractConstant.Refines` (`.constant c` holds when `actual ⊒ .int c`). It was first introduced as `SoundForValue` with a looser poison escape, and renamed when operand facts were also moved to refinement (`transfer_sound`, whose operand hypothesis is `OperandsRefine`; the exact-operand core `transfer_sound_exact` uses `OperandsExact` / `DescribesExactly`).
-- `PropagatesPoisonHonestly` (Task 5) is unchanged and still demands exact poison results.
+- `PropagatesPoisonSound` (Task 5) is unchanged and still demands exact poison results.
 
 The code snippets in Tasks 2 and 4 below have been updated to match. Proof sketches elsewhere predate the change; the committed proofs are authoritative.
 
@@ -507,27 +507,27 @@ git commit -m "feat(interpreter): state fold soundness contract and prove the ev
 
 ### Task 5: The poison-propagation leg
 
-`foldPoisonedOperand` (`Veir/Interfaces/FoldInterfaces.lean:63`) fires when `opType.propagatesPoison` and some known operand is poison, and folds every result to poison. Unlike the evaluation leg this never consults the interpreter, so soundness rests entirely on the `propagatesPoison` flag being honest.
+`foldPoisonedOperand` (`Veir/Interfaces/FoldInterfaces.lean:63`) fires when `opType.propagatesPoison` and some known operand is poison, and folds every result to poison. Unlike the evaluation leg this never consults the interpreter, so soundness rests entirely on the `propagatesPoison` flag being sound.
 
 **Files:**
 - Modify: `Veir/Interfaces/FoldSoundness.lean`
 
 **Interfaces:**
 - Consumes: `FoldDecision.SoundFor`, `interpretPure`, `ConstOperandsAgree` from Task 4; `OpCode.propagatesPoison` (`Veir/GlobalOpInfo.lean:291`); `RuntimeValue.isPoison`, `RuntimeValue.getPoisonForType` (`Veir/RuntimeValue/Basic.lean:37,50`)
-- Produces: `Veir.PropagatesPoisonHonestly`, `Veir.foldPoisonedOperand_sound`
+- Produces: `Veir.PropagatesPoisonSound`, `Veir.foldPoisonedOperand_sound`
 
-- [ ] **Step 1: State the honesty property and the leg, with `sorry`**
+- [ ] **Step 1: State the flag-soundness property and the leg, with `sorry`**
 
 ```lean
 /--
-The `propagatesPoison` flag is honest for `opType`: whenever a wholly-poison
+The `propagatesPoison` flag is sound for `opType`: whenever a wholly-poison
 operand is supplied, interpretation either fails, is UB, or produces wholly
 poison results of the declared types.
 
 This is the semantic content the flag asserts. It is a per-opcode obligation:
 nothing in `Veir/IR/OpInfo.lean` enforces it.
 -/
-def PropagatesPoisonHonestly (opType : OpCode) : Prop :=
+def PropagatesPoisonSound (opType : OpCode) : Prop :=
   opType.propagatesPoison = true →
   ∀ (properties : propertiesOf opType) (resultTypes : Array TypeAttr)
     (operands : Array RuntimeValue),
@@ -538,12 +538,12 @@ def PropagatesPoisonHonestly (opType : OpCode) : Prop :=
        | _ => none) = some actual →
       resultTypes[i]?.bind RuntimeValue.getPoisonForType = some actual
 
-/-- The poison leg: poison-propagating folds are sound when the flag is honest. -/
+/-- The poison leg: poison-propagating folds are sound, given that the `propagatesPoison` flag is (`PropagatesPoisonSound`). -/
 theorem foldPoisonedOperand_sound
     (opType : OpCode) (properties : propertiesOf opType) (resultTypes : Array TypeAttr)
     (operands : Array RuntimeValue) (constOperands : Array (Option RuntimeValue))
     (decisions : Array FoldDecision) (i : Nat) (decision : FoldDecision)
-    (hHonest : PropagatesPoisonHonestly opType)
+    (hPoison : PropagatesPoisonSound opType)
     (hAgree : ConstOperandsAgree constOperands operands)
     (hFold : foldPoisonedOperand opType resultTypes constOperands = some decisions)
     (hDecision : decisions[i]? = some decision) :
@@ -558,7 +558,7 @@ Expected: builds with one `declaration uses 'sorry'`.
 
 - [ ] **Step 3: Prove the leg**
 
-`foldPoisonedOperand` guards on `opType.propagatesPoison` and on some entry of `constOperands` being `some value` with `value.isPoison`. Via `hAgree` that operand is also in `operands`, giving `operands.any RuntimeValue.isPoison = true`. The decisions are `allResultsPoison resultTypes`, i.e. `.useConstant` of `getPoisonForType` per result type. `hHonest` then says the interpreter's result at `i`, when it has one, is exactly that value.
+`foldPoisonedOperand` guards on `opType.propagatesPoison` and on some entry of `constOperands` being `some value` with `value.isPoison`. Via `hAgree` that operand is also in `operands`, giving `operands.any RuntimeValue.isPoison = true`. The decisions are `allResultsPoison resultTypes`, i.e. `.useConstant` of `getPoisonForType` per result type. `hPoison` then says the interpreter's result at `i`, when it has one, is exactly that value.
 
 ```lean
     decision.SoundFor operands (interpretPure opType properties resultTypes operands) i := by
@@ -566,8 +566,8 @@ Expected: builds with one `declaration uses 'sorry'`.
   simp only [Option.guard_eq_some, bind] at hFold
   obtain ⟨hPropagates, hSomePoison, hDecisions⟩ := hFold
   have hOperandPoison : (operands.any RuntimeValue.isPoison) = true := by
-    obtain ⟨j, value, hConst, hPoison⟩ := Array.any_eq_true.mp hSomePoison
-    exact Array.any_eq_true.mpr ⟨j, value, hAgree j value hConst, hPoison⟩
+    obtain ⟨j, value, hConst, hConstPoison⟩ := Array.any_eq_true.mp hSomePoison
+    exact Array.any_eq_true.mpr ⟨j, value, hAgree j value hConst, hConstPoison⟩
   unfold FoldDecision.SoundFor
   cases hInterp : interpretPure opType properties resultTypes operands with
   | fail => trivial
@@ -576,7 +576,7 @@ Expected: builds with one `declaration uses 'sorry'`.
       cases hResult : results[i]? with
       | none => trivial
       | some actual =>
-          have hPoisonValue := hHonest hPropagates properties resultTypes operands
+          have hPoisonValue := hPoison hPropagates properties resultTypes operands
             hOperandPoison i actual (by simp [hInterp, hResult])
           have : decision = .useConstant actual := by
             simpa [← hDecisions, allResultsPoison, hPoisonValue] using hDecision
@@ -765,7 +765,7 @@ theorem foldsTo_sound
     (operands : Array RuntimeValue) (constOperands : Array (Option RuntimeValue))
     (decisions : Array FoldDecision) (i : Nat) (decision : FoldDecision)
     (hTable : FoldTableSound opType)
-    (hHonest : PropagatesPoisonHonestly opType)
+    (hPoison : PropagatesPoisonSound opType)
     (hAgree : ConstOperandsAgree constOperands operands)
     (hSize : constOperands.size = operands.size)
     (hFold : OpCode.foldsTo opType properties resultTypes constOperands = some decisions)
@@ -789,14 +789,14 @@ Expected: builds with one `declaration uses 'sorry'`.
   split at hFold
   case isTrue => simp at hFold          -- constant-like: foldsTo returns none
   case isFalse =>
-    cases hPoison : foldPoisonedOperand opType resultTypes constOperands with
+    cases hPoisonFold : foldPoisonedOperand opType resultTypes constOperands with
     | some poisonDecisions =>
-        have : decisions = poisonDecisions := by simpa [hPoison] using hFold
+        have : decisions = poisonDecisions := by simpa [hPoisonFold] using hFold
         subst this
         exact foldPoisonedOperand_sound opType properties resultTypes operands constOperands
-          decisions i decision hHonest hAgree hPoison hDecision
+          decisions i decision hPoison hAgree hPoisonFold hDecision
     | none =>
-        simp only [hPoison] at hFold
+        simp only [hPoisonFold] at hFold
         unfold preferredFold at hFold
         split at hFold
         · -- the evaluation decision won
@@ -833,7 +833,7 @@ git commit -m "feat(interpreter): assemble fold soundness across table, evaluati
 - Modify: `Veir/Analysis/DataFlow/SparseConstantPropagationAnalysis.lean`
 
 **Interfaces:**
-- Consumes: `AbstractConstant.SoundFor` (Task 2), `foldsTo_sound`, `FoldTableSound`, `PropagatesPoisonHonestly`, `ConstOperandsAgree`, `interpretPure` (Tasks 4–7)
+- Consumes: `AbstractConstant.SoundFor` (Task 2), `foldsTo_sound`, `FoldTableSound`, `PropagatesPoisonSound`, `ConstOperandsAgree`, `interpretPure` (Tasks 4–7)
 - Produces: `SparseConstantPropagation.OperandsSound`, `SparseConstantPropagation.transfer_sound`
 
 - [ ] **Step 1: State the new theorem with `sorry`, keeping the old one alongside**
@@ -864,7 +864,7 @@ theorem transfer_sound
     (op : OperationPtr) (irCtx : WfIRContext OpCode) (opInBounds : op.InBounds irCtx.raw)
     (abstractOperands : Array AbstractConstant) (concreteOperands : Array RuntimeValue)
     (hTable : FoldTableSound (op.getOpType! irCtx.raw))
-    (hHonest : PropagatesPoisonHonestly (op.getOpType! irCtx.raw))
+    (hPoison : PropagatesPoisonSound (op.getOpType! irCtx.raw))
     (hOperands : OperandsSound abstractOperands concreteOperands)
     (hSize : abstractOperands.size = concreteOperands.size)
     (hInitialized : ¬ abstractOperands.any (· = ⊥))
@@ -1047,10 +1047,10 @@ Three things remain open after Task 9. Write them down where the next person wil
 
 - [ ] **Step 1: Update the writeup**
 
-Replace the "Transfer soundness" subsection's closing paragraph with a statement of what is now proved (`transfer_sound`, unconditional except for `hInitialized`, `hTable`, `hHonest`) and what is not:
+Replace the "Transfer soundness" subsection's closing paragraph with a statement of what is now proved (`transfer_sound`, unconditional except for `hInitialized`, `hTable`, `hPoison`) and what is not:
 
 1. `FoldTableSound` holds only for `arith`. `Llvm.tryFold` (`Veir/Dialects/LLVM/OpInfo.lean:536`) and `Riscv.tryFold` (`Veir/Dialects/RISCV/OpInfo.lean:253`) are undischarged.
-2. `PropagatesPoisonHonestly` is undischarged for every opcode. It is a per-opcode obligation that nothing in `Veir/IR/OpInfo.lean:97` enforces.
+2. `PropagatesPoisonSound` is undischarged for every opcode. It is a per-opcode obligation that nothing in `Veir/IR/OpInfo.lean:97` enforces.
 3. `hInitialized` is a solver invariant. It cannot be discharged until the sparse solver is provable.
 
 - [ ] **Step 2: Extend the solver TODO**
@@ -1094,7 +1094,7 @@ Worth being blunt, because the shape of the result is easy to oversell:
 
 - **Not end-to-end soundness.** After Task 9 you have a theorem about one operation in isolation. The statement "the analysis's final facts describe every real execution" needs the solver, which is out of scope for the structural reason in Task 10.
 - **Not full dialect coverage.** `arith` only. An `llvm.udiv` folding through `Llvm.tryFold` is still unverified, and `FoldTableSound (.llvm _)` will simply be an unprovable hypothesis at the call site until someone discharges it.
-- **`PropagatesPoisonHonestly` is a real obligation, not a formality.** It quantifies over every opcode with the flag set. If any dialect has set `propagatesPoison := true` on an opcode whose interpretation does not in fact propagate poison, this plan surfaces that as an unprovable goal — which is the point, but expect it to find something.
+- **`PropagatesPoisonSound` is a real obligation, not a formality.** It quantifies over every opcode with the flag set. If any dialect has set `propagatesPoison := true` on an opcode whose interpretation does not in fact propagate poison, this plan surfaces that as an unprovable goal — which is the point, but expect it to find something.
 
 ## Self-review notes
 

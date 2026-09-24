@@ -182,7 +182,7 @@ refines the result of interpreting the operation on its concrete operands
 interpreter failure constrain nothing.
 
 The hypotheses:
-* `hTable`, `hHonest` — the per-opcode obligations of `foldsTo_sound`;
+* `hTable`, `hPoison` — the per-opcode obligations of `foldsTo_sound`;
 * `hOperands`, `hSize` — the operand facts describe the concrete operands
   exactly (`OperandsExact`, built on `AbstractConstant.DescribesExactly`). This
   also rules out `⊥` operand facts, so the `⊥` branch of `transfer` needs no
@@ -202,7 +202,7 @@ theorem transfer_sound_exact
     (op : OperationPtr) (irCtx : WfIRContext OpCode)
     (abstractOperands : Array AbstractConstant) (concreteOperands : Array RuntimeValue)
     (hTable : FoldTableSound (op.getOpType! irCtx.raw))
-    (hHonest : PropagatesPoisonHonestly (op.getOpType! irCtx.raw))
+    (hPoison : PropagatesPoisonSound (op.getOpType! irCtx.raw))
     (hOperands : OperandsExact abstractOperands concreteOperands)
     (hSize : abstractOperands.size = concreteOperands.size)
     (hArity : concreteOperands.size = op.getNumOperands! irCtx.raw)
@@ -292,7 +292,7 @@ theorem transfer_sound_exact
           ← OperationPtr.getResultTypes!_eq_getResultTypes hInBounds,
           ← OperationPtr.getOpType!_eq_getOpType hInBounds] at hFold
         exact foldsTo_sound _ _ _ concreteOperands constOperands decisions i decision
-          hTable hHonest (constOperandsAgree_of_operandsExact hOperands hSize)
+          hTable hPoison (constOperandsAgree_of_operandsExact hOperands hSize)
           (by simp [constOperands, hSize]) hFold hDecision
   · rw [show transfer op abstractOperands irCtx =
         Array.replicate (op.getNumResults! irCtx.raw) ⊤ by
@@ -404,7 +404,7 @@ That last step is the project axiom `interpretOp'_monotone`
 (`Veir/Interpreter/Lemmas.lean`), so this theorem is sound relative to it.
 
 The remaining hypotheses are those of `transfer_sound_exact`:
-* `hTable`, `hHonest` — the per-opcode obligations of `foldsTo_sound`;
+* `hTable`, `hPoison` — the per-opcode obligations of `foldsTo_sound`;
 * `hSize` — one fact per concrete operand;
 * `hArity` — the concrete operands are as many as the operation has;
 * `hConstSuccessors` — a constant-like operation has no successors.
@@ -413,7 +413,7 @@ theorem transfer_sound
     (op : OperationPtr) (irCtx : WfIRContext OpCode)
     (abstractOperands : Array AbstractConstant) (concreteOperands : Array RuntimeValue)
     (hTable : FoldTableSound (op.getOpType! irCtx.raw))
-    (hHonest : PropagatesPoisonHonestly (op.getOpType! irCtx.raw))
+    (hPoison : PropagatesPoisonSound (op.getOpType! irCtx.raw))
     (hOperands : OperandsRefine abstractOperands concreteOperands)
     (hSize : abstractOperands.size = concreteOperands.size)
     (hArity : concreteOperands.size = op.getNumOperands! irCtx.raw)
@@ -425,7 +425,7 @@ theorem transfer_sound
         (op.getProperties! irCtx.raw (op.getOpType! irCtx.raw))
         (op.getResultTypes! irCtx.raw) concreteOperands) i := by
   have hExact := transfer_sound_exact op irCtx abstractOperands
-    (refineOperands abstractOperands concreteOperands) hTable hHonest
+    (refineOperands abstractOperands concreteOperands) hTable hPoison
     (operandsExact_refineOperands hOperands) (by simp [hSize])
     (by simp [hArity]) hConstSuccessors i
   have hMono := interpretOp'_monotone (op.getOpType! irCtx.raw)
