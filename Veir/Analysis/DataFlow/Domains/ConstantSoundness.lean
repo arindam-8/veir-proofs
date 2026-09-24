@@ -38,17 +38,22 @@ def ofTrackedValue : RuntimeValue → Option ConcreteConstant
   | _ => none
 
 /--
-`a.SoundForValue actual` says the abstract fact `a` is a sound claim about the
-runtime value `actual`, read as a refinement: `⊤` claims nothing, `⊥` claims the
-value does not exist, and `.constant c` claims that the integer `c` refines
-`actual` (`actual ⊒ .int c`). Since a poison integer is refined by any integer of
-its width, a wholly poison result accepts every constant claim of that width.
+`a.Refines actual` says the value claimed by the abstract fact `a` refines the
+runtime value `actual`, i.e. replacing `actual` by the claim is allowed.
 
-The same relation is used for operands and results, which is what lets local
+The claim is on the refining side: `.constant c` holds when `actual ⊒ .int c`,
+matching the argument order of `RuntimeValue.isRefinedBy`, where the value being
+refined comes first. So `.constant c` accepts `actual = c`, and, since a poison
+integer is refined by any integer of its width, a poison `actual` of that width.
+`⊤` claims nothing and so holds for every value; `⊥` claims the value does not
+exist and so holds for none.
+
+Compare `AbstractConstant.DescribesExactly`, which requires `actual = c`. The same
+relation `Refines` is used for operands and results, which is what lets local
 transfer soundness compose along an execution.
 -/
 @[expose]
-def SoundForValue (a : AbstractConstant) (actual : RuntimeValue) : Prop :=
+def Refines (a : AbstractConstant) (actual : RuntimeValue) : Prop :=
   match a with
   | .top => True
   | .bottom => False
@@ -63,8 +68,7 @@ Only a successful interpretation constrains the fact:
   sound — this is what makes a UB-to-poison fold statable;
 * `.fail` means the interpreter cannot model the operation, which likewise
   constrains nothing;
-* on `.ok`, the fact must be sound for the result in the refinement sense of
-  `SoundForValue`.
+* on `.ok`, the fact must refine the result, in the sense of `Refines`.
 
 Note that `.ub` and `.fail` are justified differently. `.ub` is a semantic claim
 about the source program. `.fail` is a statement about VeIR's own coverage, so
@@ -75,18 +79,18 @@ def SoundFor (a : AbstractConstant) (outcome : Interp (Array RuntimeValue)) (i :
   match outcome with
   | .ok results =>
       match results[i]? with
-      | some actual => SoundForValue a actual
+      | some actual => Refines a actual
       | none => True
   | .ub => True
   | .fail => True
 
 @[simp]
-theorem soundForValue_top (actual : RuntimeValue) : SoundForValue ⊤ actual := by
+theorem refines_top (actual : RuntimeValue) : Refines ⊤ actual := by
   trivial
 
-/-- A sound fact stays sound when weakened up the lattice. -/
-theorem soundForValue_mono (a b : AbstractConstant) (actual : RuntimeValue) (hab : a ≤ b) :
-    SoundForValue a actual → SoundForValue b actual := by
+/-- A fact that refines a value still does when weakened up the lattice. -/
+theorem refines_mono (a b : AbstractConstant) (actual : RuntimeValue) (hab : a ≤ b) :
+    Refines a actual → Refines b actual := by
   intro h
   cases b with
   | top => trivial
@@ -105,9 +109,12 @@ theorem soundForValue_mono (a b : AbstractConstant) (actual : RuntimeValue) (hab
       subst hcd
       exact h
 
-/-- Soundness is preserved when the actual value is itself refined away from. -/
-theorem soundForValue_of_isRefinedBy {a : AbstractConstant} {v v' : RuntimeValue}
-    (hRefines : v ⊒ v') (h : SoundForValue a v') : SoundForValue a v := by
+/--
+A fact that refines `v'` also refines any `v` that `v'` refines: the claim
+refines `v'`, which refines `v` (transitivity of `⊒`).
+-/
+theorem refines_of_isRefinedBy {a : AbstractConstant} {v v' : RuntimeValue}
+    (hRefines : v ⊒ v') (h : Refines a v') : Refines a v := by
   cases a with
   | top => trivial
   | bottom => exact h.elim
@@ -123,7 +130,7 @@ theorem soundFor_top (outcome : Interp (Array RuntimeValue)) (i : Nat) :
       simp only [SoundFor]
       cases results[i]? with
       | none => trivial
-      | some actual => exact soundForValue_top actual
+      | some actual => exact refines_top actual
 
 @[simp]
 theorem soundFor_ub (a : AbstractConstant) (i : Nat) :
@@ -145,7 +152,7 @@ theorem soundFor_mono (a b : AbstractConstant) (outcome : Interp (Array RuntimeV
       simp only [SoundFor]
       cases results[i]? with
       | none => intro _; trivial
-      | some actual => exact soundForValue_mono a b actual hab
+      | some actual => exact refines_mono a b actual hab
 
 end AbstractConstant
 

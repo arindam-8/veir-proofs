@@ -21,7 +21,7 @@
 Both soundness relations were changed from exact equality to refinement (commit `fe1ab2f73`). The exact form rejected `arith.addui_extended x, 0`: the table folds the carry flag to `0` even when `x` is poison, where the interpreter's flag is poison. Poison may be refined to any value of its type, so the fold is correct, but it does not *equal* the interpreted value. Design discussion: https://claude.ai/code/artifact/6d7c6ec2-a4df-495a-a789-ff21f6bf160b
 
 - `FoldDecision.SoundFor` (Task 4): on `.ok`, `actual.isPoison = true ∨ decision.valueFor operands = some actual`.
-- `AbstractConstant.SoundFor` (Task 2): on `.ok`, delegates to the new `AbstractConstant.SoundForValue a actual := actual.isPoison = true ∨ (match ofTrackedValue actual with | some c => c ∈ γ a | none => True)`.
+- `AbstractConstant.SoundFor` (Task 2): on `.ok`, delegates to a per-value relation, now `AbstractConstant.Refines` (`.constant c` holds when `actual ⊒ .int c`). It was first introduced as `SoundForValue` with a looser poison escape, and renamed when operand facts were also moved to refinement (`transfer_sound`, whose operand hypothesis is `OperandsRefine`; the exact-operand core `transfer_sound_exact` uses `OperandsExact` / `DescribesExactly`).
 - `PropagatesPoisonHonestly` (Task 5) is unchanged and still demands exact poison results.
 
 The code snippets in Tasks 2 and 4 below have been updated to match. Proof sketches elsewhere predate the change; the committed proofs are authoritative.
@@ -154,7 +154,7 @@ def SoundFor (a : AbstractConstant) (outcome : Interp (Array RuntimeValue)) (i :
   match outcome with
   | .ok results =>
       match results[i]? with
-      | some actual => SoundForValue a actual
+      | some actual => Refines a actual
       | none => True
   | .ub => True
   | .fail => True

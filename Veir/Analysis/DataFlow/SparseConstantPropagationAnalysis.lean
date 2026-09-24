@@ -64,50 +64,52 @@ def transfer
     Array.replicate numResults ⊤
 
 /--
-`a.Describes v` says the abstract fact `a` describes the runtime value `v`
+`a.DescribesExactly v` says the abstract fact `a` describes the runtime value `v`
 exactly: `⊤` describes every value, `⊥` none, and `.constant c` only the
-integer `c` itself — poison included, with no refinement.
+integer `c` itself — poison included, with no refinement. It is
+`AbstractConstant.Refines` with `⊒` strengthened to `=`.
 
-Operand facts are read exactly because folding consumes them as values: a
-`.constant` operand fact is handed to the folder as the operand's value.
+`transfer_sound_exact` reads operand facts this way because folding consumes
+them as values: a `.constant` operand fact is handed to the folder as the
+operand's value.
 -/
-def _root_.Veir.AbstractConstant.Describes (a : AbstractConstant) (v : RuntimeValue) : Prop :=
+def _root_.Veir.AbstractConstant.DescribesExactly (a : AbstractConstant) (v : RuntimeValue) : Prop :=
   match a with
   | .top => True
   | .bottom => False
   | .constant c => v = .int c.bitwidth c.value
 
 /-- Every abstract operand fact describes its concrete operand exactly. -/
-def OperandsDescribed (abstractOperands : Array AbstractConstant)
+def OperandsExact (abstractOperands : Array AbstractConstant)
     (concreteOperands : Array RuntimeValue) : Prop :=
   ∀ (j : Nat) (a : AbstractConstant) (v : RuntimeValue),
-    abstractOperands[j]? = some a → concreteOperands[j]? = some v → a.Describes v
+    abstractOperands[j]? = some a → concreteOperands[j]? = some v → a.DescribesExactly v
 
 /--
-Every abstract operand fact is sound for its concrete operand, as a refinement
-(`AbstractConstant.SoundForValue`). This is the relation `transfer_sound`
-establishes for results, so it is the one that composes along an execution.
+Every abstract operand fact refines its concrete operand
+(`AbstractConstant.Refines`). This is the relation `transfer_sound` establishes
+for results, so it is the one that composes along an execution.
 -/
-def OperandsSound (abstractOperands : Array AbstractConstant)
+def OperandsRefine (abstractOperands : Array AbstractConstant)
     (concreteOperands : Array RuntimeValue) : Prop :=
   ∀ (j : Nat) (a : AbstractConstant) (v : RuntimeValue),
-    abstractOperands[j]? = some a → concreteOperands[j]? = some v → a.SoundForValue v
+    abstractOperands[j]? = some a → concreteOperands[j]? = some v → a.Refines v
 
-/-- An exact description is in particular a sound one. -/
-theorem soundForValue_of_describes {a : AbstractConstant} {v : RuntimeValue}
-    (h : a.Describes v) : a.SoundForValue v := by
+/-- An exact description is in particular a refinement. -/
+theorem refines_of_describesExactly {a : AbstractConstant} {v : RuntimeValue}
+    (h : a.DescribesExactly v) : a.Refines v := by
   cases a with
   | top => trivial
   | bottom => exact h.elim
   | constant c =>
-    simp only [AbstractConstant.Describes] at h
+    simp only [AbstractConstant.DescribesExactly] at h
     subst h
     show RuntimeValue.int c.bitwidth c.value ⊒ RuntimeValue.int c.bitwidth c.value
     exact RuntimeValue.isRefinedBy_refl _
 
-/-- The abstraction of a runtime value is sound for that value. -/
-theorem soundForValue_ofRuntimeValue (v : RuntimeValue) :
-    (AbstractConstant.ofRuntimeValue v).SoundForValue v := by
+/-- The abstraction of a runtime value refines that value. -/
+theorem refines_ofRuntimeValue (v : RuntimeValue) :
+    (AbstractConstant.ofRuntimeValue v).Refines v := by
   cases v with
   | int bitwidth value =>
     show RuntimeValue.int bitwidth value ⊒ RuntimeValue.int bitwidth value
@@ -115,9 +117,9 @@ theorem soundForValue_ofRuntimeValue (v : RuntimeValue) :
   | _ => trivial
 
 /-- The constants handed to the folder agree with the concrete operands. -/
-theorem constOperandsAgree_of_operandsDescribed
+theorem constOperandsAgree_of_operandsExact
     {abstractOperands : Array AbstractConstant} {concreteOperands : Array RuntimeValue}
-    (hOperands : OperandsDescribed abstractOperands concreteOperands)
+    (hOperands : OperandsExact abstractOperands concreteOperands)
     (hSize : abstractOperands.size = concreteOperands.size) :
     ConstOperandsAgree
       (abstractOperands.map fun
@@ -131,12 +133,12 @@ theorem constOperandsAgree_of_operandsDescribed
     have := (Array.getElem?_eq_some_iff.mp ha).1
     omega
   obtain ⟨w, hw⟩ : ∃ w, concreteOperands[j]? = some w := ⟨_, Array.getElem?_eq_getElem hj⟩
-  have hDescribes := hOperands j a w ha hw
+  have hExact := hOperands j a w ha hw
   cases a with
   | constant c =>
     simp only [Option.some.injEq] at hv
-    simp only [AbstractConstant.Describes] at hDescribes
-    rw [hw, hDescribes, ← hv]
+    simp only [AbstractConstant.DescribesExactly] at hExact
+    rw [hw, hExact, ← hv]
   | top => simp at hv
   | bottom => simp at hv
 
@@ -144,7 +146,7 @@ theorem constOperandsAgree_of_operandsDescribed
 theorem ofFoldDecision_soundFor
     (decision : FoldDecision) (abstractOperands : Array AbstractConstant)
     (concreteOperands : Array RuntimeValue) (outcome : Interp (Array RuntimeValue)) (i : Nat)
-    (hOperands : OperandsDescribed abstractOperands concreteOperands)
+    (hOperands : OperandsExact abstractOperands concreteOperands)
     (hDecision : decision.SoundFor concreteOperands outcome i) :
     (AbstractConstant.ofFoldDecision decision abstractOperands).SoundFor outcome i := by
   cases outcome with
@@ -158,38 +160,39 @@ theorem ofFoldDecision_soundFor
     | some actual =>
       simp only [hResult] at hDecision
       obtain ⟨claimed, hValue, hRefines⟩ := hDecision
-      apply AbstractConstant.soundForValue_of_isRefinedBy hRefines
+      apply AbstractConstant.refines_of_isRefinedBy hRefines
       cases decision with
       | useConstant value =>
         simp only [FoldDecision.valueFor, Option.some.injEq] at hValue
         subst hValue
-        exact soundForValue_ofRuntimeValue value
+        exact refines_ofRuntimeValue value
       | useOperand j =>
         simp only [FoldDecision.valueFor] at hValue
         simp only [AbstractConstant.ofFoldDecision]
         cases ha : abstractOperands[j]? with
-        | none => exact AbstractConstant.soundForValue_top claimed
-        | some a => exact soundForValue_of_describes (hOperands j a claimed ha hValue)
+        | none => exact AbstractConstant.refines_top claimed
+        | some a => exact refines_of_describesExactly (hOperands j a claimed ha hValue)
 
 /--
 Local soundness of the transfer function for exactly described operands.
 
 This is the core step of `transfer_sound`. Every result fact `transfer` produces
-is sound, in the refinement sense of
-`AbstractConstant.SoundFor`, for the interpretation of the operation on its
-concrete operands. UB and interpreter failure constrain nothing.
+refines the result of interpreting the operation on its concrete operands
+(`AbstractConstant.SoundFor`, built on `AbstractConstant.Refines`). UB and
+interpreter failure constrain nothing.
 
 The hypotheses:
 * `hTable`, `hHonest` — the per-opcode obligations of `foldsTo_sound`;
 * `hOperands`, `hSize` — the operand facts describe the concrete operands
-  exactly (`AbstractConstant.Describes`). This also rules out `⊥` operand facts,
-  so the `⊥` branch of `transfer` needs no separate premise;
+  exactly (`OperandsExact`, built on `AbstractConstant.DescribesExactly`). This
+  also rules out `⊥` operand facts, so the `⊥` branch of `transfer` needs no
+  separate premise;
 * `hArity` — the concrete operands are as many as the operation has;
 * `hConstSuccessors` — a constant-like operation has no successors, so the
   interpretation `ValuePtr.constantValue` runs agrees with `interpretPure`.
 
-On its own this theorem is asymmetric: operand facts are read exactly, result
-facts only up to refinement. A result fact may claim a value where the execution
+On its own this theorem is asymmetric: operand facts must describe their
+operands exactly, result facts are only guaranteed to refine theirs. A result fact may claim a value where the execution
 produced poison (`arith.addui_extended x, 0` with poison `x`), and such a fact
 does not describe the value exactly, so this theorem does not chain across
 operations. `transfer_sound` removes the asymmetry by relaxing the operands to
@@ -200,7 +203,7 @@ theorem transfer_sound_exact
     (abstractOperands : Array AbstractConstant) (concreteOperands : Array RuntimeValue)
     (hTable : FoldTableSound (op.getOpType! irCtx.raw))
     (hHonest : PropagatesPoisonHonestly (op.getOpType! irCtx.raw))
-    (hOperands : OperandsDescribed abstractOperands concreteOperands)
+    (hOperands : OperandsExact abstractOperands concreteOperands)
     (hSize : abstractOperands.size = concreteOperands.size)
     (hArity : concreteOperands.size = op.getNumOperands! irCtx.raw)
     (hConstSuccessors : (op.getOpType! irCtx.raw).isConstantLike = true →
@@ -261,7 +264,7 @@ theorem transfer_sound_exact
         | none => trivial
         | some actual =>
           simp only [Option.map_some, Option.getD_some]
-          exact soundForValue_ofRuntimeValue actual
+          exact refines_ofRuntimeValue actual
   by_cases hInBounds : op.InBounds irCtx.raw
   · let constOperands :=
       abstractOperands.map fun
@@ -289,7 +292,7 @@ theorem transfer_sound_exact
           ← OperationPtr.getResultTypes!_eq_getResultTypes hInBounds,
           ← OperationPtr.getOpType!_eq_getOpType hInBounds] at hFold
         exact foldsTo_sound _ _ _ concreteOperands constOperands decisions i decision
-          hTable hHonest (constOperandsAgree_of_operandsDescribed hOperands hSize)
+          hTable hHonest (constOperandsAgree_of_operandsExact hOperands hSize)
           (by simp [constOperands, hSize]) hFold hDecision
   · rw [show transfer op abstractOperands irCtx =
         Array.replicate (op.getNumResults! irCtx.raw) ⊤ by
@@ -314,22 +317,22 @@ theorem refineOperands_size (abstractOperands : Array AbstractConstant)
   simp [refineOperands]
 
 /-- The operand facts describe the refined operands exactly. -/
-theorem operandsDescribed_refineOperands
+theorem operandsExact_refineOperands
     {abstractOperands : Array AbstractConstant} {concreteOperands : Array RuntimeValue}
-    (hOperands : OperandsSound abstractOperands concreteOperands) :
-    OperandsDescribed abstractOperands (refineOperands abstractOperands concreteOperands) := by
+    (hOperands : OperandsRefine abstractOperands concreteOperands) :
+    OperandsExact abstractOperands (refineOperands abstractOperands concreteOperands) := by
   intro j a w ha hw
   simp only [refineOperands, Array.getElem?_mapIdx, Option.map_eq_some_iff] at hw
   obtain ⟨v, hv, rfl⟩ := hw
   cases a with
   | top => trivial
   | bottom => exact hOperands j .bottom v ha hv
-  | constant c => simp [ha, AbstractConstant.Describes]
+  | constant c => simp [ha, AbstractConstant.DescribesExactly]
 
 /-- Each concrete operand is refined by its counterpart in `refineOperands`. -/
 theorem isRefinedBy_refineOperands
     {abstractOperands : Array AbstractConstant} {concreteOperands : Array RuntimeValue}
-    (hOperands : OperandsSound abstractOperands concreteOperands) :
+    (hOperands : OperandsRefine abstractOperands concreteOperands) :
     concreteOperands ⊒ refineOperands abstractOperands concreteOperands := by
   refine ⟨(refineOperands_size _ _).symm, fun j hj => ?_⟩
   have hRefined : (refineOperands abstractOperands concreteOperands)[j]! =
@@ -348,9 +351,9 @@ theorem isRefinedBy_refineOperands
     | bottom => exact RuntimeValue.isRefinedBy_refl _
 
 /--
-A fact sound for the result of a refined interpretation is sound for the
-original: if interpreting `operands` is refined by interpreting `operands'`,
-soundness transfers from the latter to the former.
+If interpreting `operands` is refined by interpreting `operands'`, a fact sound
+for the latter outcome is sound for the former: the fact's claim refines the
+refined result, which in turn refines the original result.
 -/
 theorem soundFor_of_interp_isRefinedBy
     {a : AbstractConstant} {i : Nat}
@@ -381,20 +384,21 @@ theorem soundFor_of_interp_isRefinedBy
         rw [hTarget] at hSound
         have hvEq : v = sourceResult.1[i]! := by simp_all
         subst hvEq
-        exact AbstractConstant.soundForValue_of_isRefinedBy (hPointwise i hi) hSound
+        exact AbstractConstant.refines_of_isRefinedBy (hPointwise i hi) hSound
 
 /--
 Local soundness of the constant-propagation transfer function.
 
-Every result fact `transfer` produces is sound, as a refinement
-(`AbstractConstant.SoundFor`), for the interpretation of the operation on its
-concrete operands, provided every operand fact is sound for its operand in the
-same sense (`OperandsSound`). Because operands and results are related by the
-same relation, the theorem composes along an execution.
+Every result fact `transfer` produces refines the result of interpreting the
+operation on its concrete operands (`AbstractConstant.SoundFor`, built on
+`AbstractConstant.Refines`), provided every operand fact refines its concrete
+operand (`OperandsRefine`). Because operands and results are related by the same
+relation, `Refines`, the theorem composes along an execution.
 
-The proof reduces to `transfer_sound_exact`. The operands the folder sees,
-`refineOperands`, are described exactly by the operand facts and refine the
-concrete operands, and interpretation is monotone under refinement.
+The proof reduces to `transfer_sound_exact`. The operands the folder is told
+about, `refineOperands`, are described exactly by the operand facts
+(`OperandsExact`) and refine the concrete operands, and interpretation is
+monotone under refinement.
 
 That last step is the project axiom `interpretOp'_monotone`
 (`Veir/Interpreter/Lemmas.lean`), so this theorem is sound relative to it.
@@ -410,7 +414,7 @@ theorem transfer_sound
     (abstractOperands : Array AbstractConstant) (concreteOperands : Array RuntimeValue)
     (hTable : FoldTableSound (op.getOpType! irCtx.raw))
     (hHonest : PropagatesPoisonHonestly (op.getOpType! irCtx.raw))
-    (hOperands : OperandsSound abstractOperands concreteOperands)
+    (hOperands : OperandsRefine abstractOperands concreteOperands)
     (hSize : abstractOperands.size = concreteOperands.size)
     (hArity : concreteOperands.size = op.getNumOperands! irCtx.raw)
     (hConstSuccessors : (op.getOpType! irCtx.raw).isConstantLike = true →
@@ -422,7 +426,7 @@ theorem transfer_sound
         (op.getResultTypes! irCtx.raw) concreteOperands) i := by
   have hExact := transfer_sound_exact op irCtx abstractOperands
     (refineOperands abstractOperands concreteOperands) hTable hHonest
-    (operandsDescribed_refineOperands hOperands) (by simp [hSize])
+    (operandsExact_refineOperands hOperands) (by simp [hSize])
     (by simp [hArity]) hConstSuccessors i
   have hMono := interpretOp'_monotone (op.getOpType! irCtx.raw)
     (op.getProperties! irCtx.raw (op.getOpType! irCtx.raw)) (op.getResultTypes! irCtx.raw)
