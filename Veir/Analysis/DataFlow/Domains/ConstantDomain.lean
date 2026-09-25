@@ -3,6 +3,9 @@ module
 public import Veir.Data.LLVM.Int.Basic
 public import Veir.Analysis.DataFlow.Domains.AbstractDomain
 public import Veir.FoldDecision
+public import Veir.Interpreter.Refinement.Basic
+
+import Veir.Interpreter.Refinement.Lemmas
 
 public section
 
@@ -73,11 +76,19 @@ def ofFoldDecision
   | .useOperand index => operands[index]?.getD ⊤
   | .useConstant value => .ofRuntimeValue value
 
-@[expose] def γ (absVal : AbstractConstant) : Set ConcreteConstant :=
+/--
+Concretization: the runtime values a fact allows. This is the only relation
+between facts and runtime values in the soundness proofs.
+
+`.constant c` allows every value that `c` refines: `c` itself, or poison of the
+same width. The analysis's facts justify *replacing* a value by `c`, and
+replacing poison by `c` is a refinement.
+-/
+@[expose] def γ (absVal : AbstractConstant) : Set RuntimeValue :=
   match absVal with
   | .top => fun _ => True
   | .bottom => fun _ => False
-  | .constant a => fun concVal => concVal = a
+  | .constant c => fun v => v ⊒ .int c.bitwidth c.value
 
 def join (lhs rhs : AbstractConstant) : AbstractConstant :=
   match lhs, rhs with
@@ -91,24 +102,33 @@ instance : Join AbstractConstant where
   join := join
 
 theorem γ_monotone (a b : AbstractConstant) : a ≤ b → γ a ⊆ γ b := by
-  intro hab x hx
-  cases a <;> cases b <;> simp [γ] at hab hx ⊢
-  all_goals first | trivial | exact hx.trans hab
+  intro hab v hv
+  cases a <;> cases b <;> simp only [LE.le, le] at hab
+  all_goals first | trivial | exact hab.elim | exact hv.elim | (subst hab; exact hv)
 
 @[simp]
-theorem γ_top_eq (x : ConcreteConstant) : x ∈ γ (.top : AbstractConstant) := by
-  change (γ (.top : AbstractConstant)) x
-  simp [γ]
+theorem mem_γ_top (v : RuntimeValue) : v ∈ γ (.top : AbstractConstant) := trivial
 
-@[simp]
-theorem γ_bot_eq_empty : γ (.bottom : AbstractConstant) = (fun _ : ConcreteConstant => False) := by
-  ext x
-  simp [γ]
+theorem not_mem_γ_bot (v : RuntimeValue) : v ∉ γ (.bottom : AbstractConstant) := id
 
-@[simp]
-theorem γ_constant (c : ConcreteConstant) : γ (.constant c) = (fun x => x = c) := by
-  ext x
-  simp [γ]
+theorem mem_γ_constant {c : ConcreteConstant} {v : RuntimeValue} :
+    v ∈ γ (.constant c) ↔ v ⊒ .int c.bitwidth c.value := Iff.rfl
+
+/-- `γ` is closed under refinement: if `v'` is allowed, so is any `v` it refines. -/
+theorem mem_γ_of_isRefinedBy {a : AbstractConstant} {v v' : RuntimeValue}
+    (h : v ⊒ v') (hv' : v' ∈ γ a) : v ∈ γ a := by
+  cases a with
+  | top => trivial
+  | bottom => exact hv'.elim
+  | constant c => exact RuntimeValue.isRefinedBy_trans h hv'
+
+/-- A runtime value lies in `γ` of its own abstraction. -/
+theorem mem_γ_ofRuntimeValue (v : RuntimeValue) : v ∈ γ (ofRuntimeValue v) := by
+  cases v with
+  | int bitwidth value =>
+    show RuntimeValue.int bitwidth value ⊒ RuntimeValue.int bitwidth value
+    exact RuntimeValue.isRefinedBy_refl _
+  | _ => trivial
 
 @[simp, grind .]
 theorem le_refl (a : AbstractConstant) : a ≤ a := by
@@ -165,60 +185,6 @@ theorem γ_join_overapprox (a b : AbstractConstant) :
   · intro x hx
     exact γ_join_right_subset a b hx
 
-/-- A concrete runtime integer value is represented exactly by the matching constant abstract value. -/
-theorem ofRuntimeValue_sound (v : RuntimeValue) :
-    match v with
-    | .int bitwidth value =>
-        (⟨bitwidth, value⟩ : ConcreteConstant) ∈ γ (AbstractConstant.ofRuntimeValue v)
-    | _ => True := by
-  cases v with
-  | int bitwidth value =>
-      change (⟨bitwidth, value⟩ : ConcreteConstant) = ⟨bitwidth, value⟩
-      rfl
-  | byte bitwidth value => trivial
-  | float type value => trivial
-  | addr value => trivial
-  | reg value => trivial
-  | felt fieldType value => trivial
-
-/-- The constant case of the concretization map is exactly the singleton set at that value. -/
-theorem γ_constant_eq_singleton (c : ConcreteConstant) :
-    γ (.constant c) = (fun x => x = c) := by
-  ext x
-  simp [γ]
-
-/-- A fold decision that returns a concrete constant is sound with respect to the abstract concretization. -/
-theorem ofFoldDecision_useConstant_sound
-    (v : RuntimeValue) (operands : Array AbstractConstant) :
-    match v with
-    | .int bitwidth value =>
-        (⟨bitwidth, value⟩ : ConcreteConstant) ∈
-          γ (AbstractConstant.ofFoldDecision (.useConstant v) operands)
-    | _ => True := by
-  cases v with
-  | int bitwidth value =>
-      change (⟨bitwidth, value⟩ : ConcreteConstant) = ⟨bitwidth, value⟩
-      rfl
-  | byte bitwidth value => trivial
-  | float type value => trivial
-  | addr value => trivial
-  | reg value => trivial
-  | felt fieldType value => trivial
-
-/-- A fold decision that reuses an operand is sound when that operand is itself sound. -/
-theorem ofFoldDecision_useOperand_sound
-    (operands : Array AbstractConstant) (index : Nat) :
-    match operands[index]? with
-    | some a =>
-        γ a = γ (AbstractConstant.ofFoldDecision (.useOperand index) operands)
-    | none =>
-        γ (⊤ : AbstractConstant) = γ (AbstractConstant.ofFoldDecision (.useOperand index) operands) := by
-  cases h : operands[index]? with
-  | none =>
-      simp [AbstractConstant.ofFoldDecision, h, γ]
-  | some a =>
-      simp [AbstractConstant.ofFoldDecision, h, γ]
-
 theorem join_self (a : AbstractConstant) : a ⊔ a = a := by
   apply le_antisymm
   · exact join_le a a a (le_refl a) (le_refl a)
@@ -246,7 +212,7 @@ theorem join_assoc (a b c : AbstractConstant) : (a ⊔ b) ⊔ c = a ⊔ (b ⊔ c
           (le_join_right a b) (le_join_left (a ⊔ b) c))
         (le_join_right (a ⊔ b) c))
 
-instance : AbstractDomain AbstractConstant ConcreteConstant where
+instance : AbstractDomain AbstractConstant RuntimeValue where
   toJoinSemilattice := inferInstance
   toBoundedOrder := inferInstance
   γ := γ

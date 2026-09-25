@@ -103,3 +103,20 @@ info: "ok"
 -/
 #guard_msgs in
 #eval! testAddUIExtendedZeroClearsCarry
+
+/--
+`γ` is the one relation between facts and runtime values. A `.constant c` fact
+allows `c`, and also poison of that width, since replacing poison by `c` is a
+refinement. It allows nothing else.
+-/
+private def zero8 : AbstractConstant := .constant ⟨8, .val 0#8⟩
+
+example : RuntimeValue.int 8 (.val 0#8) ∈ AbstractConstant.γ zero8 :=
+  AbstractConstant.mem_γ_constant.mpr (RuntimeValue.isRefinedBy_refl _)
+
+example : RuntimeValue.int 8 .poison ∈ AbstractConstant.γ zero8 :=
+  AbstractConstant.mem_γ_constant.mpr (RuntimeValue.int_poison_isRefinedBy 8 _)
+
+example : RuntimeValue.int 8 (.val 1#8) ∉ AbstractConstant.γ zero8 := by
+  simp [zero8, AbstractConstant.mem_γ_constant, RuntimeValue.isRefinedBy, Data.LLVM.Int.cast,
+    _root_.isRefinedBy]
