@@ -1,16 +1,20 @@
+import Veir.Analysis.DataFlow.Domains.ConstantSoundness
 import Veir.Analysis.DataFlow.SparseConstantPropagationAnalysis
 import Veir.Interfaces.FoldSoundness
-import Veir.Interpreter.Lemmas
-import Veir.Interpreter.Refinement.Lemmas
 
 /-!
 # Soundness of sparse constant propagation
 
 Local soundness of `SparseConstantPropagation.transfer`: if every operand lies in
 `γ` of its fact, every result lies in `γ` of the fact `transfer` produces
-(`transfer_sound`). Folding is justified by `fold_sound`, which bridges the
-folder's contract (`foldsTo_sound`, `Veir/Interfaces/FoldSoundness.lean`) from
-the operands the folder saw to the real ones.
+(`transfer_sound`).
+
+The folder is only ever told values that `exact` facts pin down, so its inputs
+agree with the real operands and its contract (`foldsTo_sound`,
+`Veir/Interfaces/FoldSoundness.lean`) applies to the real run directly
+(`fold_sound`). An `upTo` operand is handled by case analysis: the real operand
+is one of the cases `transfer` runs (`exists_operandCase`), and the join is
+above each case (`le_joinAll`). No monotonicity of the interpreter is needed.
 -/
 
 public section
@@ -19,80 +23,69 @@ namespace Veir
 
 namespace SparseConstantPropagation
 
+/-- Every value lies in `γ` of the fact at the same position, and there are as many of each. -/
+def AllInGamma : List AbstractConstant → List RuntimeValue → Prop
+  | [], [] => True
+  | fact :: facts, v :: vs => v ∈ AbstractConstant.γ fact ∧ AllInGamma facts vs
+  | _, _ => False
+
 /--
-Every operand lies in `γ` of its fact. This is `γ` pointwise: the relation
-`transfer_sound` assumes of the operands and establishes for the results, so it
-composes along an execution.
+Every operand lies in `γ` of its fact, one fact per operand. This is `γ`
+pointwise: the relation `transfer_sound` assumes of the operands and establishes
+for the results, so it composes along an execution.
 -/
 def OperandsInGamma (facts : Array AbstractConstant) (vs : Array RuntimeValue) : Prop :=
-  ∀ (j : Nat) (a : AbstractConstant) (v : RuntimeValue),
-    facts[j]? = some a → vs[j]? = some v → v ∈ AbstractConstant.γ a
+  AllInGamma facts.toList vs.toList
 
-/--
-The operands the folder's inputs describe: `c` where `foldInputs` tells the
-folder the operand is `c`, the real operand elsewhere. The folder's contract
-(`foldsTo_sound`) is about exactly these operands.
--/
-def foldedOperands (facts : Array AbstractConstant) (vs : Array RuntimeValue) :
-    Array RuntimeValue :=
-  vs.mapIdx fun j v =>
-    match facts[j]? with
-    | some (.constant c) => .int c.bitwidth c.value
-    | _ => v
+theorem AllInGamma.length_eq :
+    ∀ {facts : List AbstractConstant} {vs : List RuntimeValue},
+      AllInGamma facts vs → facts.length = vs.length
+  | [], [], _ => rfl
+  | _ :: _, _ :: _, h => by simp [AllInGamma.length_eq h.2]
+  | [], _ :: _, h => h.elim
+  | _ :: _, [], h => h.elim
 
-@[simp]
-theorem foldedOperands_size (facts : Array AbstractConstant) (vs : Array RuntimeValue) :
-    (foldedOperands facts vs).size = vs.size := by
-  simp [foldedOperands]
+theorem AllInGamma.mem :
+    ∀ {facts : List AbstractConstant} {vs : List RuntimeValue} {j : Nat}
+      {a : AbstractConstant} {v : RuntimeValue},
+      AllInGamma facts vs → facts[j]? = some a → vs[j]? = some v → v ∈ AbstractConstant.γ a
+  | _ :: _, _ :: _, 0, _, _, h, ha, hv => by
+    simp only [List.getElem?_cons_zero, Option.some.injEq] at ha hv
+    subst ha; subst hv; exact h.1
+  | _ :: _, _ :: _, _ + 1, _, _, h, ha, hv => by
+    simp only [List.getElem?_cons_succ] at ha hv
+    exact AllInGamma.mem h.2 ha hv
+  | [], _, _, _, _, _, ha, _ => by simp at ha
+  | _ :: _, [], _, _, _, _, _, hv => by simp at hv
 
-/-- The folder's inputs agree with `foldedOperands`, by construction. -/
-theorem constOperandsAgree_foldedOperands (facts : Array AbstractConstant)
-    (vs : Array RuntimeValue) (hSize : facts.size = vs.size) :
-    ConstOperandsAgree (foldInputs facts) (foldedOperands facts vs) := by
+theorem OperandsInGamma.size_eq {facts : Array AbstractConstant} {vs : Array RuntimeValue}
+    (h : OperandsInGamma facts vs) : facts.size = vs.size := by
+  simpa using AllInGamma.length_eq h
+
+theorem OperandsInGamma.mem {facts : Array AbstractConstant} {vs : Array RuntimeValue}
+    (h : OperandsInGamma facts vs) {j : Nat} {a : AbstractConstant} {v : RuntimeValue}
+    (ha : facts[j]? = some a) (hv : vs[j]? = some v) : v ∈ AbstractConstant.γ a :=
+  AllInGamma.mem h (by simpa using ha) (by simpa using hv)
+
+/-- The folder's inputs agree with the real operands: an `exact` fact pins its operand. -/
+theorem constOperandsAgree_foldInputs {facts : Array AbstractConstant} {vs : Array RuntimeValue}
+    (hOperands : OperandsInGamma facts vs) : ConstOperandsAgree (foldInputs facts) vs := by
   intro j v hConst
   simp only [foldInputs, Array.getElem?_map, Option.map_eq_some_iff] at hConst
   obtain ⟨a, ha, hv⟩ := hConst
   have hj : j < vs.size := by
     have := (Array.getElem?_eq_some_iff.mp ha).1
+    have := hOperands.size_eq
     omega
+  have hMem := hOperands.mem ha (Array.getElem?_eq_getElem hj)
   cases a with
-  | constant c =>
+  | exact c =>
     obtain ⟨bitwidth, value⟩ := c
     simp only [Option.some.injEq] at hv
-    simp [foldedOperands, hj, ha, ← hv]
+    rw [Array.getElem?_eq_getElem hj, AbstractConstant.mem_γ_exact.mp hMem, hv]
   | top => simp at hv
   | bottom => simp at hv
-
-/-- The facts still hold of `foldedOperands`. -/
-theorem operandsInGamma_foldedOperands {facts : Array AbstractConstant} {vs : Array RuntimeValue}
-    (hOperands : OperandsInGamma facts vs) : OperandsInGamma facts (foldedOperands facts vs) := by
-  intro j a w ha hw
-  simp only [foldedOperands, Array.getElem?_mapIdx, Option.map_eq_some_iff] at hw
-  obtain ⟨v, hv, rfl⟩ := hw
-  cases a with
-  | top => trivial
-  | bottom => exact hOperands j .bottom v ha hv
-  | constant c =>
-    simp only [ha]
-    exact AbstractConstant.mem_γ_constant.mpr (RuntimeValue.isRefinedBy_refl _)
-
-/-- The real operands refine `foldedOperands`: this is `γ` at the `.constant` facts. -/
-theorem isRefinedBy_foldedOperands {facts : Array AbstractConstant} {vs : Array RuntimeValue}
-    (hOperands : OperandsInGamma facts vs) : vs ⊒ foldedOperands facts vs := by
-  refine ⟨(foldedOperands_size _ _).symm, fun j hj => ?_⟩
-  have hFolded : (foldedOperands facts vs)[j]! =
-      match facts[j]? with
-      | some (.constant c) => .int c.bitwidth c.value
-      | _ => vs[j]! := by
-    simp [foldedOperands, hj]
-  rw [hFolded]
-  cases ha : facts[j]? with
-  | none => exact RuntimeValue.isRefinedBy_refl _
-  | some a =>
-    cases a with
-    | constant c => exact hOperands j (.constant c) _ ha (by simp [hj])
-    | top => exact RuntimeValue.isRefinedBy_refl _
-    | bottom => exact RuntimeValue.isRefinedBy_refl _
+  | upTo c => simp at hv
 
 /-- A fold decision that is sound for `operands` yields a fact that is sound. -/
 theorem ofFoldDecision_soundFor
@@ -112,146 +105,125 @@ theorem ofFoldDecision_soundFor
     | some actual =>
       simp only [hResult] at hDecision
       obtain ⟨claimed, hValue, hRefines⟩ := hDecision
-      apply AbstractConstant.mem_γ_of_isRefinedBy hRefines
       cases decision with
       | useConstant value =>
         simp only [FoldDecision.valueFor, Option.some.injEq] at hValue
         subst hValue
-        exact AbstractConstant.mem_γ_ofRuntimeValue value
+        exact AbstractConstant.mem_γ_weaken_of_isRefinedBy hRefines
+          (AbstractConstant.mem_γ_ofRuntimeValue value)
       | useOperand j =>
         simp only [FoldDecision.valueFor] at hValue
         simp only [AbstractConstant.ofFoldDecision]
+        apply AbstractConstant.mem_γ_weaken_of_isRefinedBy hRefines
         cases ha : facts[j]? with
         | none => exact AbstractConstant.mem_γ_top claimed
-        | some a => exact hOperands j a claimed ha hValue
+        | some a => exact hOperands.mem ha hValue
 
 /--
-If interpreting `operands` is refined by interpreting `operands'`, a fact sound
-for the latter outcome is sound for the former: `γ` is closed under refinement.
--/
-theorem soundFor_of_interp_isRefinedBy
-    {a : AbstractConstant} {i : Nat}
-    {source target : Interp (Array RuntimeValue × MemoryState × Option ControlFlowAction)}
-    (hRefines : Interp.isRefinedBy
-      (fun (r₁ r₂ : Array RuntimeValue × MemoryState × Option ControlFlowAction) =>
-        RuntimeValue.arrayIsRefinedBy r₁.1 r₂.1 ∧ r₁.2.1 = r₂.2.1 ∧
-        ControlFlowAction.optionIsRefinedBy r₁.2.2 r₂.2.2) source target)
-    (hSound : a.SoundFor (target.map (fun (results, _, _) => results)) i) :
-    a.SoundFor (source.map (fun (results, _, _) => results)) i := by
-  cases source with
-  | fail => trivial
-  | ub => trivial
-  | ok sourceResult =>
-    cases target with
-    | fail => exact hRefines.elim
-    | ub => exact hRefines.elim
-    | ok targetResult =>
-      obtain ⟨⟨hSizeEq, hPointwise⟩, -, -⟩ := hRefines
-      simp only [Interp.map_ok, AbstractConstant.SoundFor] at hSound ⊢
-      cases hv : sourceResult.1[i]? with
-      | none => trivial
-      | some v =>
-        have hi : i < sourceResult.1.size := (Array.getElem?_eq_some_iff.mp hv).1
-        have hi' : i < targetResult.1.size := by omega
-        have hTarget : targetResult.1[i]? = some targetResult.1[i]! := by
-          simp [hi']
-        rw [hTarget] at hSound
-        have hvEq : v = sourceResult.1[i]! := by simp_all
-        subst hvEq
-        exact AbstractConstant.mem_γ_of_isRefinedBy (hPointwise i hi) hSound
-
-/--
-Soundness of a fold decision for the real operands.
-
-The folder decided on `foldInputs facts`, and its contract (`foldsTo_sound`) is
-about the operands those inputs describe, `foldedOperands facts vs`. The real
-operands only lie in `γ` of the facts: at a `.constant c` fact the real operand
-may be poison where the folder assumed `c`. The real operands refine the folded
-ones (`isRefinedBy_foldedOperands`), so if interpretation is monotone the real
-run refines the folded run, and a fact sound for the folded run is sound for the
-real one (`soundFor_of_interp_isRefinedBy`).
-
-This is the only lemma that relates the folder's run to the real run, and the
-only use of monotonicity. It currently takes it from the project axiom
-`interpretOp'_monotone` (`Veir/Interpreter/Lemmas.lean`), which is false for
-`llvm.freeze`: the interpreter maps `freeze poison` to `0`, which `freeze 5 = 5`
-does not refine.
+Soundness of a fold decision for the real operands. The folder's inputs agree
+with the real operands (`constOperandsAgree_foldInputs`), so its contract
+(`foldsTo_sound`) is about the real run itself.
 -/
 theorem fold_sound
     (opType : OpCode) (properties : propertiesOf opType) (resultTypes : Array TypeAttr)
     (facts : Array AbstractConstant) (vs : Array RuntimeValue)
     (decisions : Array FoldDecision) (i : Nat) (decision : FoldDecision)
     (hTable : FoldTableSound opType) (hPoison : PropagatesPoisonSound opType)
-    (hOperands : OperandsInGamma facts vs) (hSize : facts.size = vs.size)
+    (hOperands : OperandsInGamma facts vs)
     (hFold : OpCode.foldsTo opType properties resultTypes (foldInputs facts) = some decisions)
     (hDecision : decisions[i]? = some decision) :
     (AbstractConstant.ofFoldDecision decision facts).SoundFor
-      (interpretPure opType properties resultTypes vs) i := by
-  have hFolded := foldsTo_sound opType properties resultTypes (foldedOperands facts vs)
-    (foldInputs facts) decisions i decision hTable hPoison
-    (constOperandsAgree_foldedOperands facts vs hSize) (by simp [foldInputs, hSize])
-    hFold hDecision
-  have hFact := ofFoldDecision_soundFor decision facts (foldedOperands facts vs) _ i
-    (operandsInGamma_foldedOperands hOperands) hFolded
-  have hMono := interpretOp'_monotone opType properties resultTypes vs
-    (foldedOperands facts vs) #[] MemoryState.empty (isRefinedBy_foldedOperands hOperands)
-  exact soundFor_of_interp_isRefinedBy hMono hFact
+      (interpretPure opType properties resultTypes vs) i :=
+  ofFoldDecision_soundFor decision facts vs _ i hOperands
+    (foldsTo_sound opType properties resultTypes vs (foldInputs facts) decisions i decision
+      hTable hPoison (constOperandsAgree_foldInputs hOperands)
+      (by simp [foldInputs, hOperands.size_eq]) hFold hDecision)
+
+/-- Evaluating an operation whose operands are all `exact` gives sound, exact facts. -/
+theorem evaluateExact_sound
+    (op : OperationPtr) (irCtx : WfIRContext OpCode)
+    (facts : Array AbstractConstant) (vs : Array RuntimeValue) (results : Array AbstractConstant)
+    (hOperands : OperandsInGamma facts vs)
+    (hEval : evaluateExact op facts irCtx = some results) (i : Nat) :
+    (results[i]?.getD ⊤).SoundFor
+      (interpretPure (op.getOpType! irCtx.raw)
+        (op.getProperties! irCtx.raw (op.getOpType! irCtx.raw))
+        (op.getResultTypes! irCtx.raw) vs) i := by
+  simp only [evaluateExact] at hEval
+  cases hValues : (foldInputs facts).mapM id with
+  | none => simp [hValues] at hEval
+  | some values =>
+    have hEq : values = vs :=
+      ConstOperandsAgree.mapM_id_eq (constOperandsAgree_foldInputs hOperands)
+        (by simp [foldInputs, hOperands.size_eq]) hValues
+    subst hEq
+    simp only [hValues, Option.bind_eq_bind, Option.bind_some] at hEval
+    cases hRun : foldEvaluate (op.getOpType! irCtx.raw)
+        (op.getProperties! irCtx.raw (op.getOpType! irCtx.raw)) (op.getResultTypes! irCtx.raw)
+        values with
+    | fail => simp [hRun] at hEval
+    | ub =>
+      rw [interpretPure_of_foldEvaluate_ub hRun]
+      exact AbstractConstant.soundFor_ub _ i
+    | ok rs =>
+      simp only [hRun, Option.some.injEq] at hEval
+      subst hEval
+      rw [interpretPure_of_foldEvaluate_ok hRun]
+      simp only [AbstractConstant.SoundFor]
+      cases hResult : rs[i]? with
+      | none => trivial
+      | some actual =>
+        simp only [Array.getElem?_map, hResult, Option.map_some, Option.getD_some]
+        exact AbstractConstant.mem_γ_ofRuntimeValue actual
 
 /--
-Local soundness of the constant-propagation transfer function.
-
-If every operand lies in `γ` of its fact (`OperandsInGamma`), every result lies
-in `γ` of the fact `transfer` produces (`AbstractConstant.SoundFor`), whenever
-interpretation succeeds; UB and interpreter failure constrain nothing. Operands
-and results use the same relation, `γ`, so the theorem composes along an
-execution.
-
-Folding is justified by `fold_sound`, the one place where the folder's run is
-related to the real run.
+Local soundness of `transferExact`, the transfer function for one case of the
+operand facts.
 
 Hypotheses:
 * `hTable`, `hPoison` — per-opcode obligations of `foldsTo_sound`;
-* `hSize`, `hArity` — one fact per operand, as many operands as the op has;
+* `hArity` — as many operands as the op has;
 * `hConstSuccessors` — a constant-like operation has no successors, so the
   interpretation `ValuePtr.constantValue` runs agrees with `interpretPure`.
 -/
-theorem transfer_sound
+theorem transferExact_sound
     (op : OperationPtr) (irCtx : WfIRContext OpCode)
     (abstractOperands : Array AbstractConstant) (concreteOperands : Array RuntimeValue)
     (hTable : FoldTableSound (op.getOpType! irCtx.raw))
     (hPoison : PropagatesPoisonSound (op.getOpType! irCtx.raw))
     (hOperands : OperandsInGamma abstractOperands concreteOperands)
-    (hSize : abstractOperands.size = concreteOperands.size)
     (hArity : concreteOperands.size = op.getNumOperands! irCtx.raw)
     (hConstSuccessors : (op.getOpType! irCtx.raw).isConstantLike = true →
       op.getSuccessors! irCtx.raw = #[])
     (i : Nat) :
-    ((transfer op abstractOperands irCtx)[i]?.getD ⊤).SoundFor
+    ((transferExact op abstractOperands irCtx)[i]?.getD ⊤).SoundFor
       (interpretPure (op.getOpType! irCtx.raw)
         (op.getProperties! irCtx.raw (op.getOpType! irCtx.raw))
         (op.getResultTypes! irCtx.raw) concreteOperands) i := by
+  have hSize := hOperands.size_eq
   have hTop : ∀ n, ((Array.replicate n (⊤ : AbstractConstant))[i]?.getD ⊤) = ⊤ := by
     intro n
     rw [Array.getElem?_replicate]
     split <;> rfl
   by_cases hRegions : op.getNumRegions! irCtx.raw ≠ 0
-  · rw [show transfer op abstractOperands irCtx =
-        Array.replicate (op.getNumResults! irCtx.raw) ⊤ by simp [transfer, hRegions], hTop]
+  · rw [show transferExact op abstractOperands irCtx =
+        Array.replicate (op.getNumResults! irCtx.raw) ⊤ by simp [transferExact, hRegions], hTop]
     exact AbstractConstant.soundFor_top _ i
   have hRegions0 : op.getNumRegions! irCtx.raw = 0 := by simpa using hRegions
   by_cases hBot : abstractOperands.any (· = ⊥)
   · exfalso
     obtain ⟨j, hj, hjBot⟩ := Array.any_eq_true.mp hBot
     have hjConcrete : j < concreteOperands.size := by omega
-    have := hOperands j _ _ (Array.getElem?_eq_getElem hj) (Array.getElem?_eq_getElem hjConcrete)
+    have := hOperands.mem (Array.getElem?_eq_getElem hj) (Array.getElem?_eq_getElem hjConcrete)
     simp only [decide_eq_true_eq] at hjBot
     rw [hjBot] at this
     exact AbstractConstant.not_mem_γ_bot _ this
   by_cases hConst : (op.getOpType! irCtx.raw).isConstantLike = true
   · have hSuccessors := hConstSuccessors hConst
-    rw [show transfer op abstractOperands irCtx = (op.getResults! irCtx.raw).map (fun result =>
-        (result.constantValue irCtx.raw).map AbstractConstant.ofRuntimeValue |>.getD ⊤) by
-          simp [transfer, hRegions0, hBot, hConst]]
+    rw [show transferExact op abstractOperands irCtx =
+        (op.getResults! irCtx.raw).map (fun result =>
+          (result.constantValue irCtx.raw).map AbstractConstant.ofRuntimeValue |>.getD ⊤) by
+          simp [transferExact, hRegions0, hBot, hConst]]
     by_cases hi : ¬ i < op.getNumResults! irCtx.raw
     · have hNone : (op.getResults! irCtx.raw)[i]? = none := by simp; omega
       simp [Array.getElem?_map, hNone]
@@ -282,17 +254,23 @@ theorem transfer_sound
         | some actual =>
           simp only [Option.map_some, Option.getD_some]
           exact AbstractConstant.mem_γ_ofRuntimeValue actual
+  cases hEval : evaluateExact op abstractOperands irCtx with
+  | some results =>
+    rw [show transferExact op abstractOperands irCtx = results by
+      simp [transferExact, hRegions0, hBot, hConst, hEval]]
+    exact evaluateExact_sound op irCtx abstractOperands concreteOperands results hOperands hEval i
+  | none =>
   by_cases hInBounds : op.InBounds irCtx.raw
   · cases hFold : op.foldsTo irCtx hInBounds (foldInputs abstractOperands) with
     | none =>
-      rw [show transfer op abstractOperands irCtx =
+      rw [show transferExact op abstractOperands irCtx =
           Array.replicate (op.getNumResults! irCtx.raw) ⊤ by
-            simp [transfer, hRegions0, hBot, hConst, hInBounds, hFold], hTop]
+            simp [transferExact, hRegions0, hBot, hConst, hEval, hInBounds, hFold], hTop]
       exact AbstractConstant.soundFor_top _ i
     | some decisions =>
-      rw [show transfer op abstractOperands irCtx =
+      rw [show transferExact op abstractOperands irCtx =
           decisions.map (fun decision => AbstractConstant.ofFoldDecision decision abstractOperands) by
-            simp [transfer, hRegions0, hBot, hConst, hInBounds, hFold]]
+            simp [transferExact, hRegions0, hBot, hConst, hEval, hInBounds, hFold]]
       cases hDecision : decisions[i]? with
       | none => simp [hDecision]
       | some decision =>
@@ -304,10 +282,83 @@ theorem transfer_sound
           ← OperationPtr.getResultTypes!_eq_getResultTypes hInBounds,
           ← OperationPtr.getOpType!_eq_getOpType hInBounds] at hFold
         exact fold_sound _ _ _ abstractOperands concreteOperands decisions i decision
-          hTable hPoison hOperands hSize hFold hDecision
-  · rw [show transfer op abstractOperands irCtx =
+          hTable hPoison hOperands hFold hDecision
+  · rw [show transferExact op abstractOperands irCtx =
         Array.replicate (op.getNumResults! irCtx.raw) ⊤ by
-          simp [transfer, hRegions0, hBot, hConst, hInBounds], hTop]
+          simp [transferExact, hRegions0, hBot, hConst, hEval, hInBounds], hTop]
+    exact AbstractConstant.soundFor_top _ i
+
+/-- The real operands lie in `γ` of one of the cases `transfer` runs. -/
+theorem exists_operandCase :
+    ∀ (facts : List AbstractConstant) (vs : List RuntimeValue) (budget : Nat),
+      AllInGamma facts vs → ∃ facts' ∈ operandCases facts budget, AllInGamma facts' vs
+  | [], [], _, _ => ⟨[], by simp [operandCases], trivial⟩
+  | [], _ :: _, _, h => h.elim
+  | _ :: _, [], _, h => h.elim
+  | fact :: facts, v :: vs, budget, ⟨hv, hRest⟩ => by
+    cases fact with
+    | upTo c =>
+      cases budget with
+      | zero =>
+        obtain ⟨facts', hMem, hAll⟩ := exists_operandCase facts vs 0 hRest
+        refine ⟨⊤ :: facts', ?_, ⟨trivial, hAll⟩⟩
+        simp only [operandCases, List.mem_map]
+        exact ⟨facts', hMem, rfl⟩
+      | succ budget =>
+        obtain ⟨fact', hCase, hv'⟩ := AbstractConstant.exists_exactCase hv
+        obtain ⟨facts', hMem, hAll⟩ := exists_operandCase facts vs budget hRest
+        refine ⟨fact' :: facts', ?_, ⟨hv', hAll⟩⟩
+        simp only [operandCases, List.mem_flatMap, List.mem_map]
+        exact ⟨fact', hCase, facts', hMem, rfl⟩
+    | top | bottom | exact =>
+      obtain ⟨facts', hMem, hAll⟩ := exists_operandCase facts vs budget hRest
+      refine ⟨_ :: facts', ?_, ⟨hv, hAll⟩⟩
+      simp only [operandCases, List.mem_map]
+      exact ⟨facts', hMem, rfl⟩
+
+theorem le_joinAll : ∀ {facts : List AbstractConstant} {fact : AbstractConstant},
+    fact ∈ facts → fact ≤ joinAll facts
+  | _ :: _, _, .head _ => AbstractConstant.le_join_left _ _
+  | fact' :: _, _, .tail _ h =>
+    AbstractConstant.le_trans _ _ _ (le_joinAll h) (AbstractConstant.le_join_right fact' _)
+
+/--
+Local soundness of the constant-propagation transfer function.
+
+If every operand lies in `γ` of its fact (`OperandsInGamma`), every result lies
+in `γ` of the fact `transfer` produces (`AbstractConstant.SoundFor`), whenever
+interpretation succeeds; UB and interpreter failure constrain nothing. Operands
+and results use the same relation, `γ`, so the theorem composes along an
+execution.
+
+The real operands match one of the cases `transfer` runs (`exists_operandCase`),
+`transferExact` is sound for that case (`transferExact_sound`), and the joined
+fact is above it (`le_joinAll`).
+-/
+theorem transfer_sound
+    (op : OperationPtr) (irCtx : WfIRContext OpCode)
+    (abstractOperands : Array AbstractConstant) (concreteOperands : Array RuntimeValue)
+    (hTable : FoldTableSound (op.getOpType! irCtx.raw))
+    (hPoison : PropagatesPoisonSound (op.getOpType! irCtx.raw))
+    (hOperands : OperandsInGamma abstractOperands concreteOperands)
+    (hArity : concreteOperands.size = op.getNumOperands! irCtx.raw)
+    (hConstSuccessors : (op.getOpType! irCtx.raw).isConstantLike = true →
+      op.getSuccessors! irCtx.raw = #[])
+    (i : Nat) :
+    ((transfer op abstractOperands irCtx)[i]?.getD ⊤).SoundFor
+      (interpretPure (op.getOpType! irCtx.raw)
+        (op.getProperties! irCtx.raw (op.getOpType! irCtx.raw))
+        (op.getResultTypes! irCtx.raw) concreteOperands) i := by
+  obtain ⟨facts, hMem, hAll⟩ :=
+    exists_operandCase abstractOperands.toList concreteOperands.toList maxSplits hOperands
+  have hCase := transferExact_sound op irCtx facts.toArray concreteOperands hTable hPoison
+    (by simpa [OperandsInGamma] using hAll) hArity hConstSuccessors i
+  by_cases hi : i < op.getNumResults! irCtx.raw
+  · simp only [transfer, Array.getElem?_ofFn, hi, dite_true, Option.getD_some]
+    refine AbstractConstant.soundFor_mono _ _ _ _ (le_joinAll ?_) hCase
+    simp only [List.map_map, List.mem_map]
+    exact ⟨facts, hMem, rfl⟩
+  · simp only [transfer, Array.getElem?_ofFn, hi, dite_false, Option.getD_none]
     exact AbstractConstant.soundFor_top _ i
 
 end SparseConstantPropagation

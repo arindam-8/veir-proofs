@@ -13,10 +13,13 @@ motivated stating soundness up to refinement.
 open Veir
 
 private def constInt (bitwidth : Nat) (value : Int) : AbstractConstant :=
-  .constant ⟨bitwidth, Data.LLVM.Int.constant bitwidth value⟩
+  .exact ⟨bitwidth, Data.LLVM.Int.constant bitwidth value⟩
 
 private def poisonInt (bitwidth : Nat) : AbstractConstant :=
-  .constant ⟨bitwidth, .poison⟩
+  .exact ⟨bitwidth, .poison⟩
+
+private def upToInt (bitwidth : Nat) (value : Int) : AbstractConstant :=
+  .upTo ⟨bitwidth, Data.LLVM.Int.constant bitwidth value⟩
 
 private def run (mlir : String) (expected : Array (String × AbstractConstant)) : String :=
   runWithAnalyses mlir #[Veir.SparseConstantPropagationAnalysis]
@@ -82,8 +85,8 @@ info: "ok"
 
 /--
 `arith.addui_extended x, 0` folds the carry flag to `0` even when `x` is unknown.
-When `x` is poison the interpreted flag is poison, so this fact is sound only as
-a refinement — the case that fixed the shape of `FoldDecision.SoundFor`.
+When `x` is poison the interpreted flag is poison, so the fact is `upTo 0`, not
+`exact 0`: the folder's answer only holds up to refinement.
 -/
 private def testAddUIExtendedZeroClearsCarry : String :=
   run
@@ -96,7 +99,7 @@ private def testAddUIExtendedZeroClearsCarry : String :=
     "func.return"() : () -> ()
   }) : () -> ()
 }) : () -> ()"#
-    #[ ("x", ⊤), ("z", constInt 8 0), ("s", ⊤), ("c", constInt 1 0) ]
+    #[ ("x", ⊤), ("z", constInt 8 0), ("s", ⊤), ("c", upToInt 1 0) ]
 
 /--
 info: "ok"
@@ -105,18 +108,70 @@ info: "ok"
 #eval! testAddUIExtendedZeroClearsCarry
 
 /--
-`γ` is the one relation between facts and runtime values. A `.constant c` fact
-allows `c`, and also poison of that width, since replacing poison by `c` is a
-refinement. It allows nothing else.
+Joining a constant with poison gives `upTo`, which the old domain could only
+express as `⊤`. An `upTo` operand is split into its two cases: `%next` is `6` or
+poison, while `freeze` of `5` and of poison differ, so `%frozen` is `⊤`.
 -/
-private def zero8 : AbstractConstant := .constant ⟨8, .val 0#8⟩
+private def testUpToFromJoinWithPoison : String :=
+  run
+    r#""builtin.module"() ({
+^bb0:
+  %five = "arith.constant"() <{ value = 5 : i32 }> : () -> i32
+  "cf.br"(%five) [^bb2] : (i32) -> ()
+^bb1:
+  %poison = "llvm.mlir.poison"() : () -> i32
+  "cf.br"(%poison) [^bb2] : (i32) -> ()
+^bb2(%joined : i32):
+  %one = "arith.constant"() <{ value = 1 : i32 }> : () -> i32
+  %next = "arith.addi"(%joined, %one) : (i32, i32) -> i32
+  %frozen = "llvm.freeze"(%joined) : (i32) -> i32
+}) : () -> ()"#
+    #[ ("joined", upToInt 32 5), ("next", upToInt 32 6), ("frozen", ⊤) ]
+
+/--
+info: "ok"
+-/
+#guard_msgs in
+#eval! testUpToFromJoinWithPoison
+
+/--
+With every operand `exact`, the operation is evaluated and the result is
+`exact`, even for `freeze`, which is not monotone.
+-/
+private def testFreezeOfExactIsExact : String :=
+  run
+    r#""builtin.module"() ({
+^bb0:
+  %five = "arith.constant"() <{ value = 5 : i32 }> : () -> i32
+  %frozen = "llvm.freeze"(%five) : (i32) -> i32
+  %poison = "llvm.mlir.poison"() : () -> i32
+  %frozenPoison = "llvm.freeze"(%poison) : (i32) -> i32
+}) : () -> ()"#
+    #[ ("frozen", constInt 32 5), ("frozenPoison", constInt 32 0) ]
+
+/--
+info: "ok"
+-/
+#guard_msgs in
+#eval! testFreezeOfExactIsExact
+
+/--
+`γ` is the one relation between facts and runtime values, and it uses equality
+only. An `.exact c` fact allows `c`; an `.upTo c` fact allows `c` and poison of
+the same width.
+-/
+private def zero8 : AbstractConstant := .exact ⟨8, .val 0#8⟩
+
+private def upToZero8 : AbstractConstant := .upTo ⟨8, .val 0#8⟩
 
 example : RuntimeValue.int 8 (.val 0#8) ∈ AbstractConstant.γ zero8 :=
-  AbstractConstant.mem_γ_constant.mpr (RuntimeValue.isRefinedBy_refl _)
+  AbstractConstant.mem_γ_exact.mpr rfl
 
-example : RuntimeValue.int 8 .poison ∈ AbstractConstant.γ zero8 :=
-  AbstractConstant.mem_γ_constant.mpr (RuntimeValue.int_poison_isRefinedBy 8 _)
+example : RuntimeValue.int 8 .poison ∉ AbstractConstant.γ zero8 := by
+  simp [zero8, AbstractConstant.mem_γ_exact]
 
-example : RuntimeValue.int 8 (.val 1#8) ∉ AbstractConstant.γ zero8 := by
-  simp [zero8, AbstractConstant.mem_γ_constant, RuntimeValue.isRefinedBy, Data.LLVM.Int.cast,
-    _root_.isRefinedBy]
+example : RuntimeValue.int 8 .poison ∈ AbstractConstant.γ upToZero8 :=
+  AbstractConstant.mem_γ_upTo.mpr (Or.inr rfl)
+
+example : RuntimeValue.int 8 (.val 1#8) ∉ AbstractConstant.γ upToZero8 := by
+  simp [upToZero8, AbstractConstant.mem_γ_upTo]
