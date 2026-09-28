@@ -1,7 +1,7 @@
 import UnitTest.DataFlowFramework.Helpers
 
 import Veir.Analysis.DataFlow.Domains.ConstantDomain
-import Veir.Analysis.DataFlow.SparseConstantPropagationAnalysis
+import Veir.Analysis.DataFlow.SparseConstantPropagationSoundness
 
 /-!
 Regression tests pinning the constant-propagation behaviour that

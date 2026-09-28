@@ -31,6 +31,7 @@ import Veir.Passes.Legalization.Proofs
 import Veir.Dialects.Arith.FoldProofs
 import Veir.Analysis.DataFlow.SparseFact
 import Veir.Analysis.DataFlow.SparseForwardDataFlowAnalysis
+import Veir.Analysis.DataFlow.SparseConstantPropagationSoundness
 import Veir.Data.FP.EScientificBV
 import Veir.Data.FP.EScientificBV.Basic
 import Veir.Data.FP.EScientificBV.ToExtRat
