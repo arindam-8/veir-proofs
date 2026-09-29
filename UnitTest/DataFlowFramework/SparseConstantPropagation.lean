@@ -6,10 +6,10 @@ import Veir.Analysis.DataFlow.SparseConstantPropagationAnalysis
 open Veir
 
 private def constInt (bitwidth : Nat) (value : Int) : AbstractConstant :=
-  .exact ⟨bitwidth, Data.LLVM.Int.constant bitwidth value⟩
+  .exact (.int bitwidth (Data.LLVM.Int.constant bitwidth value))
 
 private def poisonInt (bitwidth : Nat) : AbstractConstant :=
-  .exact ⟨bitwidth, .poison⟩
+  .exact (.int bitwidth .poison)
 
 private def run
     (mlir : String)

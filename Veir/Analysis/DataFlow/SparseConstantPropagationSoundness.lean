@@ -80,7 +80,6 @@ theorem constOperandsAgree_foldInputs {facts : Array AbstractConstant} {vs : Arr
   have hMem := hOperands.mem ha (Array.getElem?_eq_getElem hj)
   cases a with
   | exact c =>
-    obtain ⟨bitwidth, value⟩ := c
     simp only [Option.some.injEq] at hv
     rw [Array.getElem?_eq_getElem hj, AbstractConstant.mem_γ_exact.mp hMem, hv]
   | top => simp at hv
@@ -110,7 +109,7 @@ theorem ofFoldDecision_soundFor
         simp only [FoldDecision.valueFor, Option.some.injEq] at hValue
         subst hValue
         exact AbstractConstant.mem_γ_weaken_of_isRefinedBy hRefines
-          (AbstractConstant.mem_γ_ofRuntimeValue value)
+          (AbstractConstant.mem_γ_exact_self value)
       | useOperand j =>
         simp only [FoldDecision.valueFor] at hValue
         simp only [AbstractConstant.ofFoldDecision]
@@ -174,7 +173,7 @@ theorem evaluateExact_sound
       | none => trivial
       | some actual =>
         simp only [Array.getElem?_map, hResult, Option.map_some, Option.getD_some]
-        exact AbstractConstant.mem_γ_ofRuntimeValue actual
+        exact AbstractConstant.mem_γ_exact_self actual
 
 /--
 Local soundness of `transferExact`, the transfer function for one case of the
@@ -222,7 +221,7 @@ theorem transferExact_sound
   · have hSuccessors := hConstSuccessors hConst
     rw [show transferExact op abstractOperands irCtx =
         (op.getResults! irCtx.raw).map (fun result =>
-          (result.constantValue irCtx.raw).map AbstractConstant.ofRuntimeValue |>.getD ⊤) by
+          (result.constantValue irCtx.raw).map AbstractConstant.exact |>.getD ⊤) by
           simp [transferExact, hRegions0, hBot, hConst]]
     by_cases hi : ¬ i < op.getNumResults! irCtx.raw
     · have hNone : (op.getResults! irCtx.raw)[i]? = none := by simp; omega
@@ -253,7 +252,7 @@ theorem transferExact_sound
         | none => trivial
         | some actual =>
           simp only [Option.map_some, Option.getD_some]
-          exact AbstractConstant.mem_γ_ofRuntimeValue actual
+          exact AbstractConstant.mem_γ_exact_self actual
   cases hEval : evaluateExact op abstractOperands irCtx with
   | some results =>
     rw [show transferExact op abstractOperands irCtx = results by

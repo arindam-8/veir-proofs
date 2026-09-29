@@ -24,63 +24,92 @@ folder's contract is stated in: `weaken` turns a fact whose values are only
 refined into one that allows them (`mem_γ_weaken_of_isRefinedBy`).
 -/
 
-namespace AbstractConstant
-
-open ConcreteConstant
-
-/-- A runtime value lies in `γ` of its own abstraction. -/
-theorem mem_γ_ofRuntimeValue (v : RuntimeValue) : v ∈ γ (ofRuntimeValue v) := by
-  cases v <;> first | rfl | trivial
-
-/-- The values refining an integer are the integer itself and poison of its width. -/
-theorem isRefinedBy_int_iff {w : Nat} {x : Data.LLVM.Int w} {v : RuntimeValue} :
-    v ⊒ .int w x ↔ v = .int w x ∨ v = .int w .poison := by
+/-- Outside bytes, the values that refine `v` are `v` and its poison. -/
+theorem RuntimeValue.isRefinedBy_iff {v x : RuntimeValue} (hv : v.isByte = false) :
+    x ⊒ v ↔ x = v ∨ x = v.poisonOf := by
   constructor
   · intro h
     cases v with
-    | int bw s =>
-      obtain ⟨rfl, hs⟩ := h
-      simp only [Data.LLVM.Int.cast_self] at hs
-      cases s <;> cases x <;> simp_all [_root_.isRefinedBy]
-    | _ => exact h.elim
+    | byte => simp [RuntimeValue.isByte] at hv
+    | int w t =>
+      cases x with
+      | int bw s =>
+        obtain ⟨rfl, hs⟩ := h
+        simp only [Data.LLVM.Int.cast_self] at hs
+        cases s <;> cases t <;> simp_all [_root_.isRefinedBy, RuntimeValue.poisonOf]
+      | _ => exact h.elim
+    | addr t =>
+      cases x with
+      | addr s =>
+        cases s <;> cases t <;>
+          simp_all [RuntimeValue.isRefinedBy, Data.LLVM.Ptr.isRefinedBy, RuntimeValue.poisonOf]
+      | _ => exact h.elim
+    | reg t =>
+      cases x with
+      | reg s => exact Or.inl (congrArg _ h)
+      | _ => exact h.elim
+    | felt ft t =>
+      cases x with
+      | felt fs s => obtain ⟨rfl, rfl⟩ := h; exact Or.inl rfl
+      | _ => exact h.elim
+    | float ty t =>
+      cases x with
+      | float ty' s =>
+        simp only [RuntimeValue.isRefinedBy] at h
+        split at h
+        · next hty => subst hty; subst h; exact Or.inl rfl
+        · exact h.elim
+      | _ => exact h.elim
   · rintro (rfl | rfl)
     · exact RuntimeValue.isRefinedBy_refl _
-    · exact ⟨rfl, by simp [Data.LLVM.Int.cast_self, _root_.isRefinedBy]⟩
+    · cases v with
+      | int w t => exact ⟨rfl, by simp [Data.LLVM.Int.cast_self, _root_.isRefinedBy]⟩
+      | addr t => show Data.LLVM.Ptr.poison ⊒ t; trivial
+      | byte => simp [RuntimeValue.isByte] at hv
+      | _ => exact RuntimeValue.isRefinedBy_refl _
 
-/-- Only poison refines poison. -/
-theorem eq_poison_of_isRefinedBy_poison {w : Nat} {v : RuntimeValue}
-    (h : v ⊒ .int w .poison) : v = .int w .poison := by
-  rcases isRefinedBy_int_iff.mp h with h | h <;> exact h
+namespace AbstractConstant
 
 /--
-Weakening makes `γ` closed under refinement: if `v'` is allowed by `a`, any `v`
-that `v'` refines is allowed by `a.weaken`.
+Weakening makes `γ` closed under refinement: if `x'` is allowed by `a`, any `x`
+that `x'` refines is allowed by `a.weaken`.
 -/
-theorem mem_γ_weaken_of_isRefinedBy {a : AbstractConstant} {v v' : RuntimeValue}
-    (h : v ⊒ v') (hv' : v' ∈ γ a) : v ∈ γ a.weaken := by
+theorem mem_γ_weaken_of_isRefinedBy {a : AbstractConstant} {x x' : RuntimeValue}
+    (h : x ⊒ x') (hx' : x' ∈ γ a) : x ∈ γ a.weaken := by
   cases a with
   | top => trivial
-  | bottom => exact hv'.elim
-  | exact c =>
-    obtain ⟨w, x⟩ := c
-    rw [mem_γ_exact.mp hv'] at h
-    cases x with
-    | poison => exact eq_poison_of_isRefinedBy_poison h
-    | val bits => exact isRefinedBy_int_iff.mp h
-  | upTo c =>
-    rcases hv' with rfl | rfl
-    · exact isRefinedBy_int_iff.mp h
-    · exact Or.inr (eq_poison_of_isRefinedBy_poison h)
+  | bottom => exact hx'.elim
+  | exact v =>
+    rw [mem_γ_exact.mp hx'] at h
+    simp only [weaken]
+    split
+    · trivial
+    · next hb =>
+      have hx := (RuntimeValue.isRefinedBy_iff (by simpa using hb)).mp h
+      split
+      · next hp => rw [hp] at hx; rcases hx with rfl | rfl <;> rfl
+      · exact hx
+  | upTo v =>
+    simp only [weaken]
+    split
+    · trivial
+    · next hb =>
+      have hb : v.isByte = false := by simpa using hb
+      rcases hx' with rfl | rfl
+      · exact (RuntimeValue.isRefinedBy_iff hb).mp h
+      · have hx := (RuntimeValue.isRefinedBy_iff (by simpa using hb)).mp h
+        rw [RuntimeValue.poisonOf_poisonOf] at hx
+        exact Or.inr (by rcases hx with hx | hx <;> exact hx)
 
-/-- A value allowed by `upTo c` is allowed by one of the exact cases it covers. -/
-theorem exists_exactCase {a : AbstractConstant} {v : RuntimeValue} (hv : v ∈ γ a) :
-    ∃ a' ∈ exactCases a, v ∈ γ a' := by
+/-- A value allowed by `upTo v` is allowed by one of the exact cases it covers. -/
+theorem exists_exactCase {a : AbstractConstant} {x : RuntimeValue} (hx : x ∈ γ a) :
+    ∃ a' ∈ exactCases a, x ∈ γ a' := by
   cases a with
-  | upTo c =>
-    rcases hv with rfl | rfl
-    · exact ⟨.exact c, by simp [exactCases], rfl⟩
-    · exact ⟨.exact (poison c.bitwidth), by simp [exactCases], rfl⟩
-  | _ => exact ⟨_, by simp [exactCases], hv⟩
+  | upTo v =>
+    rcases hx with rfl | rfl
+    · exact ⟨.exact x, by simp [exactCases], rfl⟩
+    · exact ⟨.exact v.poisonOf, by simp [exactCases], rfl⟩
+  | _ => exact ⟨_, by simp [exactCases], hx⟩
 
 /--
 `a.SoundFor outcome i` says the abstract fact `a` does not over-claim about

@@ -115,7 +115,9 @@ private def getLiteralConstant?
       match (result.op.get! irCtx.raw).opType with
       | .arith .constant =>
         let intAttr := (result.op.getProperties! irCtx.raw Arith.constant).value
-        some (.exact ⟨intAttr.type.bitwidth, Data.LLVM.Int.constant intAttr.type.bitwidth intAttr.value⟩)
+        some (AbstractConstant.exact
+          (.int intAttr.type.bitwidth
+            (Data.LLVM.Int.constant intAttr.type.bitwidth intAttr.value)))
       | _ =>
         none
   | .blockArgument _ =>
@@ -155,14 +157,14 @@ private def getSuccessorForOperands?
     some (op.getSuccessor! irCtx.raw 0)
   else if op.getNumSuccessors! irCtx.raw = 2 then
     match operands[0]? with
-    | some (AbstractConstant.exact constant) =>
-      match constant.value with
-      | Data.LLVM.Int.val value =>
+    | some (AbstractConstant.exact value) =>
+      match value with
+      | .int _ (Data.LLVM.Int.val value) =>
         if value = 0 then
           some (op.getSuccessor! irCtx.raw 1)
         else
           some (op.getSuccessor! irCtx.raw 0)
-      | Data.LLVM.Int.poison =>
+      | _ =>
         none
     | _ =>
       none

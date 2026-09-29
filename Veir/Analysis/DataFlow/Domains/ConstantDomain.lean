@@ -1,6 +1,5 @@
 module
 
-public import Veir.Data.LLVM.Int.Basic
 public import Veir.Analysis.DataFlow.Domains.AbstractDomain
 public import Veir.FoldDecision
 
@@ -12,79 +11,85 @@ namespace Veir
 # Constant domain
 
 Instantiation of `AbstractDomain` with a constant propagation lattice whose
-elements are `bottom`, `exact c` (the value is `c`), `upTo c` (the value is `c`
-or poison of the same width), or `top`.
+elements are `bottom`, `exact v` (the value is `v`), `upTo v` (the value is `v`
+or the poison of its kind), or `top`, for any runtime value `v`.
 
 `γ` concretizes a fact to the runtime values it allows, using equality only.
 The relation to interpreter outcomes and refinement lives in
 `Veir/Analysis/DataFlow/Domains/ConstantSoundness.lean`.
 -/
 
-/-- Concrete integer values tracked by the constant domain. -/
-structure ConcreteConstant where
-  bitwidth : Nat
-  value : Data.LLVM.Int bitwidth
-deriving BEq, DecidableEq
+namespace RuntimeValue
 
-namespace ConcreteConstant
+/-- The poison of `v`'s kind and width, or `v` itself for kinds without poison. -/
+@[expose] def poisonOf : RuntimeValue → RuntimeValue
+  | .int w _ => .int w .poison
+  | .byte w _ => .byte w Data.LLVM.Byte.allPoison
+  | .addr _ => .addr .poison
+  | v => v
 
-/-- Poison of width `w`. -/
-@[expose] def poison (w : Nat) : ConcreteConstant := ⟨w, .poison⟩
+@[simp] theorem poisonOf_poisonOf (v : RuntimeValue) : v.poisonOf.poisonOf = v.poisonOf := by
+  cases v <;> rfl
 
-/--
-`c ≼ d`: `c` is `d`, or poison of `d`'s width. Every value `d` allows is
-allowed by `c` too, so `upTo c` sits below `upTo d`.
--/
-@[expose] def Below (c d : ConcreteConstant) : Prop := c = d ∨ c = poison d.bitwidth
+/-- Bytes have per-bit poison, so no single `upTo` fact describes what refines one. -/
+@[expose] def isByte : RuntimeValue → Bool
+  | .byte .. => true
+  | _ => false
 
-@[inherit_doc] infix:50 " ≼ " => Below
+@[simp] theorem isByte_poisonOf (v : RuntimeValue) : v.poisonOf.isByte = v.isByte := by
+  cases v <;> rfl
 
-instance (c d : ConcreteConstant) : Decidable (c ≼ d) :=
-  inferInstanceAs (Decidable (_ ∨ _))
-
-theorem below_refl (c : ConcreteConstant) : c ≼ c := Or.inl rfl
-
-theorem below_trans {c d e : ConcreteConstant} (hcd : c ≼ d) (hde : d ≼ e) : c ≼ e := by
-  rcases hde with rfl | rfl
-  · exact hcd
-  · rcases hcd with rfl | rfl <;> exact Or.inr rfl
-
-theorem below_antisymm {c d : ConcreteConstant} (hcd : c ≼ d) (hdc : d ≼ c) : c = d := by
-  rcases hcd with rfl | rfl
-  · rfl
-  · rcases hdc with h | h <;> exact h.symm
-
-/-- Two constants below a common one are comparable. -/
-theorem below_total_of_below {c d e : ConcreteConstant} (hce : c ≼ e) (hde : d ≼ e) :
-    c ≼ d ∨ d ≼ c := by
-  rcases hce with rfl | rfl <;> rcases hde with rfl | rfl <;>
-    first
-      | exact Or.inl (Or.inl rfl)
-      | exact Or.inl (Or.inr rfl)
-      | exact Or.inr (Or.inr rfl)
-
-end ConcreteConstant
+end RuntimeValue
 
 /-- Abstract values used by sparse constant propagation. -/
 inductive AbstractConstant where
   | top
   | bottom
   /-- The value is exactly `value`. -/
-  | exact (value : ConcreteConstant)
-  /-- The value is `value`, or poison of the same width. -/
-  | upTo (value : ConcreteConstant)
+  | exact (value : RuntimeValue)
+  /-- The value is `value`, or the poison of its kind. -/
+  | upTo (value : RuntimeValue)
 deriving BEq, DecidableEq, TypeName
 
 instance : ToString AbstractConstant where
   toString
     | .top => "top"
     | .bottom => "bottom"
-    | .exact c => s!"exact({c.value} : i{c.bitwidth})"
-    | .upTo c => s!"upTo({c.value} : i{c.bitwidth})"
+    | .exact v => s!"exact({v})"
+    | .upTo v => s!"upTo({v})"
 
 namespace AbstractConstant
 
-open ConcreteConstant
+/-- `c ≼ d`: `c` is `d`, or `d`'s poison. Every value `upTo c` allows, `upTo d` allows. -/
+@[expose] def Below (c d : RuntimeValue) : Prop := c = d ∨ c = d.poisonOf
+
+@[inherit_doc] infix:50 " ≼ " => Below
+
+instance (c d : RuntimeValue) : Decidable (c ≼ d) := inferInstanceAs (Decidable (_ ∨ _))
+
+theorem below_refl (c : RuntimeValue) : c ≼ c := Or.inl rfl
+
+theorem below_trans {c d e : RuntimeValue} (hcd : c ≼ d) (hde : d ≼ e) : c ≼ e := by
+  rcases hde with rfl | rfl
+  · exact hcd
+  · rcases hcd with rfl | rfl
+    · exact Or.inr rfl
+    · exact Or.inr (RuntimeValue.poisonOf_poisonOf e)
+
+theorem below_antisymm {c d : RuntimeValue} (hcd : c ≼ d) (hdc : d ≼ c) : c = d := by
+  rcases hcd with rfl | rfl
+  · rfl
+  · rcases hdc with h | h
+    · exact h.symm
+    · rw [RuntimeValue.poisonOf_poisonOf] at h; exact h.symm
+
+theorem below_total_of_below {c d e : RuntimeValue} (hce : c ≼ e) (hde : d ≼ e) :
+    c ≼ d ∨ d ≼ c := by
+  rcases hce with rfl | rfl <;> rcases hde with rfl | rfl
+  · exact Or.inl (Or.inl rfl)
+  · exact Or.inr (Or.inr rfl)
+  · exact Or.inl (Or.inr rfl)
+  · exact Or.inl (Or.inl rfl)
 
 /-- Defines the ordering of abstract values in the constant domain. -/
 def le (x y : AbstractConstant) : Prop :=
@@ -116,32 +121,25 @@ instance : BoundedOrder AbstractConstant where
   bot_le := bot_le
 
 /--
-Drop the claim that the value is not poison. A fold's answer is sound only up
-to refinement, which is what `upTo` allows. `exact poison` is kept, since only
-poison refines poison.
+Drop what a fold's answer can't promise. A fold only holds up to refinement:
+for bytes (per-bit poison) that says nothing; for kinds without poison it is
+equality; otherwise the value may be its poison.
 -/
 @[expose] def weaken : AbstractConstant → AbstractConstant
-  | .exact ⟨w, .poison⟩ => .exact ⟨w, .poison⟩
-  | .exact c => .upTo c
+  | .exact v => if v.isByte then ⊤ else if v.poisonOf = v then .exact v else .upTo v
+  | .upTo v => if v.isByte then ⊤ else .upTo v
   | a => a
 
-@[expose] def ofRuntimeValue : RuntimeValue → AbstractConstant
-  | .int bitwidth value => .exact ⟨bitwidth, value⟩
-  | _ => ⊤
-
-/--
-The fact for a result the folder decided on. The folder's contract only gives
-refinement, so the fact is weakened.
--/
+/-- The fact for a result the folder decided on, weakened: the folder's contract only gives refinement. -/
 @[expose] def ofFoldDecision
     (result : FoldDecision) (operands : Array AbstractConstant) : AbstractConstant :=
   match result with
   | .useOperand index => (operands[index]?.getD ⊤).weaken
-  | .useConstant value => (ofRuntimeValue value).weaken
+  | .useConstant value => (exact value).weaken
 
 /-- The exactly-known facts an `upTo` fact covers; every other fact covers itself. -/
 @[expose] def exactCases : AbstractConstant → List AbstractConstant
-  | .upTo c => [.exact c, .exact (poison c.bitwidth)]
+  | .upTo v => [.exact v, .exact v.poisonOf]
   | a => [a]
 
 /--
@@ -153,11 +151,11 @@ only.
   match absVal with
   | .top => fun _ => True
   | .bottom => fun _ => False
-  | .exact c => fun v => v = .int c.bitwidth c.value
-  | .upTo c => fun v => v = .int c.bitwidth c.value ∨ v = .int c.bitwidth .poison
+  | .exact v => fun x => x = v
+  | .upTo v => fun x => x = v ∨ x = v.poisonOf
 
 /-- The least `upTo` fact above both `c` and `d`, or `⊤` if there is none. -/
-@[expose] def joinUpTo (c d : ConcreteConstant) : AbstractConstant :=
+@[expose] def joinUpTo (c d : RuntimeValue) : AbstractConstant :=
   if c ≼ d then .upTo d else if d ≼ c then .upTo c else ⊤
 
 @[expose] def join (lhs rhs : AbstractConstant) : AbstractConstant :=
@@ -179,31 +177,26 @@ theorem mem_γ_top (v : RuntimeValue) : v ∈ γ (.top : AbstractConstant) := tr
 
 theorem not_mem_γ_bot (v : RuntimeValue) : v ∉ γ (.bottom : AbstractConstant) := id
 
-theorem mem_γ_exact {c : ConcreteConstant} {v : RuntimeValue} :
-    v ∈ γ (.exact c) ↔ v = .int c.bitwidth c.value := Iff.rfl
+theorem mem_γ_exact {v x : RuntimeValue} : x ∈ γ (.exact v) ↔ x = v := Iff.rfl
 
-theorem mem_γ_upTo {c : ConcreteConstant} {v : RuntimeValue} :
-    v ∈ γ (.upTo c) ↔ v = .int c.bitwidth c.value ∨ v = .int c.bitwidth .poison := Iff.rfl
+theorem mem_γ_upTo {v x : RuntimeValue} : x ∈ γ (.upTo v) ↔ x = v ∨ x = v.poisonOf := Iff.rfl
 
-/-- `upTo c` allows exactly the values `exact d` allows, for `d ≼ c`. -/
-theorem mem_γ_upTo_of_below {c d : ConcreteConstant} (h : d ≼ c) :
-    RuntimeValue.int d.bitwidth d.value ∈ γ (.upTo c) := by
-  rcases h with rfl | rfl
-  · exact Or.inl rfl
-  · exact Or.inr rfl
+theorem mem_γ_upTo_of_below {c d : RuntimeValue} (h : d ≼ c) : d ∈ γ (.upTo c) := h
+
+theorem mem_γ_exact_self (v : RuntimeValue) : v ∈ γ (.exact v) := rfl
 
 theorem γ_monotone (a b : AbstractConstant) : a ≤ b → γ a ⊆ γ b := by
   intro hab v hv
   cases a <;> cases b <;> simp only [LE.le, le] at hab
   all_goals first | trivial | exact hab.elim | exact hv.elim | skip
   case exact.exact c d => subst hab; exact hv
-  case exact.upTo c d =>
-    rw [mem_γ_exact.mp hv]
-    exact mem_γ_upTo_of_below hab
+  case exact.upTo c d => rw [mem_γ_exact.mp hv]; exact mem_γ_upTo_of_below hab
   case upTo.upTo c d =>
     rcases hv with rfl | rfl
     · exact mem_γ_upTo_of_below hab
-    · rcases hab with rfl | rfl <;> exact Or.inr rfl
+    · rcases hab with rfl | rfl
+      · exact Or.inr rfl
+      · exact Or.inr (RuntimeValue.poisonOf_poisonOf d)
 
 @[simp, grind .]
 theorem le_refl (a : AbstractConstant) : a ≤ a := by
@@ -232,7 +225,7 @@ theorem le_antisymm (a b : AbstractConstant) : a ≤ b → b ≤ a → a = b := 
       | (subst h; rfl)
       | rw [below_antisymm h h']
 
-theorem le_joinUpTo_left (c d : ConcreteConstant) : upTo c ≤ joinUpTo c d := by
+theorem le_joinUpTo_left (c d : RuntimeValue) : upTo c ≤ joinUpTo c d := by
   unfold joinUpTo
   split
   · next h => exact h
@@ -240,7 +233,7 @@ theorem le_joinUpTo_left (c d : ConcreteConstant) : upTo c ≤ joinUpTo c d := b
     · exact below_refl c
     · trivial
 
-theorem le_joinUpTo_right (c d : ConcreteConstant) : upTo d ≤ joinUpTo c d := by
+theorem le_joinUpTo_right (c d : RuntimeValue) : upTo d ≤ joinUpTo c d := by
   unfold joinUpTo
   split
   · exact below_refl d
@@ -248,16 +241,16 @@ theorem le_joinUpTo_right (c d : ConcreteConstant) : upTo d ≤ joinUpTo c d := 
     · next h => exact h
     · trivial
 
-theorem exact_le_upTo (c : ConcreteConstant) : exact c ≤ upTo c := below_refl c
+theorem exact_le_upTo (c : RuntimeValue) : exact c ≤ upTo c := below_refl c
 
-theorem exact_le_joinUpTo_left (c d : ConcreteConstant) : exact c ≤ joinUpTo c d :=
+theorem exact_le_joinUpTo_left (c d : RuntimeValue) : exact c ≤ joinUpTo c d :=
   le_trans _ _ _ (exact_le_upTo c) (le_joinUpTo_left c d)
 
-theorem exact_le_joinUpTo_right (c d : ConcreteConstant) : exact d ≤ joinUpTo c d :=
+theorem exact_le_joinUpTo_right (c d : RuntimeValue) : exact d ≤ joinUpTo c d :=
   le_trans _ _ _ (exact_le_upTo d) (le_joinUpTo_right c d)
 
 /-- `joinUpTo c d` is below every `upTo e` above both. -/
-theorem joinUpTo_le {c d e : ConcreteConstant} (hc : c ≼ e) (hd : d ≼ e) :
+theorem joinUpTo_le {c d e : RuntimeValue} (hc : c ≼ e) (hd : d ≼ e) :
     joinUpTo c d ≤ upTo e := by
   unfold joinUpTo
   split
@@ -266,7 +259,7 @@ theorem joinUpTo_le {c d e : ConcreteConstant} (hc : c ≼ e) (hd : d ≼ e) :
     · exact hc
     · rcases below_total_of_below hc hd with h | h <;> contradiction
 
-theorem join_exact_exact (c d : ConcreteConstant) :
+theorem join_exact_exact (c d : RuntimeValue) :
     join (.exact c) (.exact d) = if c = d then .exact c else joinUpTo c d := rfl
 
 @[simp, grind .]

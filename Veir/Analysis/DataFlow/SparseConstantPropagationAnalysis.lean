@@ -15,14 +15,14 @@ def kind : AnalysisKind :=
   .sparseConstantPropagation
 
 /--
-What `transferExact` tells the folder about the operands: an `.exact c` fact
-becomes "this operand is `c`", every other fact "unknown". Only exact facts are
+What `transferExact` tells the folder about the operands: an `.exact v` fact
+becomes "this operand is `v`", every other fact "unknown". Only exact facts are
 passed on, so every value the folder is told is the real operand. This is the
 only place the analysis turns facts into runtime values.
 -/
 def foldInputs (facts : Array AbstractConstant) : Array (Option RuntimeValue) :=
   facts.map fun
-    | .exact ⟨bitwidth, value⟩ => some (.int bitwidth value)
+    | .exact value => some value
     | _ => none
 
 /--
@@ -39,9 +39,9 @@ def evaluateExact
   let opType := op.getOpType! irCtx.raw
   let resultTypes := op.getResultTypes! irCtx.raw
   match foldEvaluate opType (op.getProperties! irCtx.raw opType) resultTypes values with
-  | .ok results => some (results.map AbstractConstant.ofRuntimeValue)
+  | .ok results => some (results.map AbstractConstant.exact)
   | .ub => some (resultTypes.map fun type =>
-      (RuntimeValue.getPoisonForType type).map AbstractConstant.ofRuntimeValue |>.getD ⊤)
+      (RuntimeValue.getPoisonForType type).map AbstractConstant.exact |>.getD ⊤)
   | .fail => none
 
 /--
@@ -76,7 +76,7 @@ def transferExact
   -- Grab constant out of constant like operation
   else if opType.isConstantLike then
     (op.getResults! irCtx.raw).map fun result =>
-      (result.constantValue irCtx.raw).map AbstractConstant.ofRuntimeValue |>.getD ⊤
+      (result.constantValue irCtx.raw).map AbstractConstant.exact |>.getD ⊤
 
   else match evaluateExact op operandLatticeElements irCtx with
   | some results => results

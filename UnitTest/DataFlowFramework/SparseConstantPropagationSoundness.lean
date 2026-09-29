@@ -13,13 +13,13 @@ motivated stating soundness up to refinement.
 open Veir
 
 private def constInt (bitwidth : Nat) (value : Int) : AbstractConstant :=
-  .exact ⟨bitwidth, Data.LLVM.Int.constant bitwidth value⟩
+  .exact (.int bitwidth (Data.LLVM.Int.constant bitwidth value))
 
 private def poisonInt (bitwidth : Nat) : AbstractConstant :=
-  .exact ⟨bitwidth, .poison⟩
+  .exact (.int bitwidth .poison)
 
 private def upToInt (bitwidth : Nat) (value : Int) : AbstractConstant :=
-  .upTo ⟨bitwidth, Data.LLVM.Int.constant bitwidth value⟩
+  .upTo (.int bitwidth (Data.LLVM.Int.constant bitwidth value))
 
 private def run (mlir : String) (expected : Array (String × AbstractConstant)) : String :=
   runWithAnalyses mlir #[Veir.SparseConstantPropagationAnalysis]
@@ -157,24 +157,37 @@ info: "ok"
 
 /--
 `γ` is the one relation between facts and runtime values, and it uses equality
-only. An `.exact c` fact allows `c`; an `.upTo c` fact allows `c` and poison of
-the same width.
+only. An `.exact v` fact allows `v`; an `.upTo v` fact allows `v` and the poison
+of its kind.
 -/
-private def zero8 : AbstractConstant := .exact ⟨8, .val 0#8⟩
+private def zero8 : AbstractConstant := .exact (.int 8 (.val 0#8))
 
-private def upToZero8 : AbstractConstant := .upTo ⟨8, .val 0#8⟩
+private def upToZero8 : AbstractConstant := .upTo (.int 8 (.val 0#8))
 
-example : RuntimeValue.int 8 (.val 0#8) ∈ AbstractConstant.γ zero8 :=
-  AbstractConstant.mem_γ_exact.mpr rfl
+example : RuntimeValue.int 8 (.val 0#8) ∈ AbstractConstant.γ zero8 := rfl
 
 example : RuntimeValue.int 8 .poison ∉ AbstractConstant.γ zero8 := by
   simp [zero8, AbstractConstant.mem_γ_exact]
 
-example : RuntimeValue.int 8 .poison ∈ AbstractConstant.γ upToZero8 :=
-  AbstractConstant.mem_γ_upTo.mpr (Or.inr rfl)
+example : RuntimeValue.int 8 .poison ∈ AbstractConstant.γ upToZero8 := Or.inr rfl
 
 example : RuntimeValue.int 8 (.val 1#8) ∉ AbstractConstant.γ upToZero8 := by
-  simp [upToZero8, AbstractConstant.mem_γ_upTo]
+  simp [upToZero8, AbstractConstant.mem_γ_upTo, RuntimeValue.poisonOf]
+
+/-- A folded byte says nothing: its poison is per bit. -/
+example : (AbstractConstant.exact (.byte 8 Data.LLVM.Byte.allPoison)).weaken = ⊤ := rfl
+
+/-- A folded pointer may really be the poison pointer. -/
+example : (AbstractConstant.exact (.addr (.val 16))).weaken = .upTo (.addr (.val 16)) := by
+  simp [AbstractConstant.weaken, RuntimeValue.isByte, RuntimeValue.poisonOf]
+
+/-- Registers and floats have no poison: a folded one stays exact. -/
+example : (AbstractConstant.exact (.reg ⟨5#64⟩)).weaken = .exact (.reg ⟨5#64⟩) := by
+  simp [AbstractConstant.weaken, RuntimeValue.isByte, RuntimeValue.poisonOf]
+
+/-- Constants of different kinds join to ⊤. -/
+example : (AbstractConstant.exact (.int 64 (.val 5#64)) ⊔ .exact (.reg ⟨5#64⟩)) = ⊤ := by
+  decide
 
 /-- The constant domain compares runtime values of every kind. -/
 example : (RuntimeValue.reg ⟨5#64⟩ == RuntimeValue.reg ⟨5#64⟩) = true := by decide
