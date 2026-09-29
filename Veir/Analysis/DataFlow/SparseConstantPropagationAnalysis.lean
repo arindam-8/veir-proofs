@@ -100,7 +100,7 @@ def maxSplits : Nat := 2
 
 /--
 The operand facts `transferExact` runs on: each of the first `budget` `upTo c`
-facts is split into `exact c` and `exact poison`, and any later `upTo` fact
+facts is split into `exact c` and `exact c.poisonOf`, and any later `upTo` fact
 becomes `⊤`.
 -/
 def operandCases : List AbstractConstant → Nat → List (List AbstractConstant)
@@ -119,8 +119,8 @@ def joinAll : List AbstractConstant → AbstractConstant
 
 /--
 Sparse constant propagation transfer function. An `upTo c` operand is `c` or
-poison, so `transferExact` runs once for each case and the results are joined,
-result by result.
+the poison of its kind, so `transferExact` runs once for each case and the
+results are joined, result by result.
 -/
 def transfer
     (op : OperationPtr)

@@ -18,8 +18,8 @@ variable {kind : FactKind} {Domain : Type}
 -- on. Lifting `SparseConstantPropagation.transfer_sound` to a fixpoint statement — every
 -- execution reaching a live SSA value is described by that value's final fact — requires
 -- converting them to well-founded recursion first (or to `partial_fixpoint`, for partial
--- correctness). `transfer_sound` relates operand and result facts by the same refinement
--- relation, so it composes along an execution.
+-- correctness). `transfer_sound` relates operand and result facts to runtime values by the
+-- same relation, `AbstractConstant.γ`, so it composes along an execution.
 variable [Bot Domain] [Join Domain] [DecidableEq Domain]
 
 /--

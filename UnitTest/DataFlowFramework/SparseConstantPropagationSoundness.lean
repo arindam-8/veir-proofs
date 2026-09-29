@@ -7,7 +7,7 @@ import Veir.Analysis.DataFlow.SparseConstantPropagationSoundness
 Regression tests pinning the constant-propagation behaviour that
 `SparseConstantPropagation.transfer_sound` describes: well-defined evaluation,
 UB folded to poison, the `arith` fold table, and the refinement case that
-motivated stating soundness up to refinement.
+motivated weakening fold results to `upTo`.
 -/
 
 open Veir
@@ -192,12 +192,21 @@ example : RuntimeValue.int 8 (.val 1#8) ∉ AbstractConstant.γ upToZero8 := by
 /-- A folded byte says nothing: its poison is per bit. -/
 example : (AbstractConstant.exact (.byte 8 Data.LLVM.Byte.allPoison)).weaken = ⊤ := rfl
 
+/-- A folded byte that isn't poison says nothing either: its poison is per bit. -/
+example : (AbstractConstant.exact (.byte 8 ⟨5#8, 0#8, by decide⟩)).weaken = ⊤ := by
+  simp [AbstractConstant.weaken, RuntimeValue.isByte]
+
 /-- A folded pointer may really be the poison pointer. -/
 example : (AbstractConstant.exact (.addr (.val ⟨0, 16⟩))).weaken = .upTo (.addr (.val ⟨0, 16⟩)) := by
   simp [AbstractConstant.weaken, RuntimeValue.isByte, RuntimeValue.poisonOf]
 
 /-- Registers and floats have no poison: a folded one stays exact. -/
 example : (AbstractConstant.exact (.reg ⟨5#64⟩)).weaken = .exact (.reg ⟨5#64⟩) := by
+  simp [AbstractConstant.weaken, RuntimeValue.isByte, RuntimeValue.poisonOf]
+
+/-- Floats have no poison: a folded one stays exact. -/
+example (ty : FloatType) (v : Data.Float.FloatValue ty.format) :
+    (AbstractConstant.exact (.float ty v)).weaken = .exact (.float ty v) := by
   simp [AbstractConstant.weaken, RuntimeValue.isByte, RuntimeValue.poisonOf]
 
 /-- Constants of different kinds join to ⊤. -/
