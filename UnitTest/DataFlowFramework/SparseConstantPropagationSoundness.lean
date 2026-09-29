@@ -175,3 +175,6 @@ example : RuntimeValue.int 8 .poison ∈ AbstractConstant.γ upToZero8 :=
 
 example : RuntimeValue.int 8 (.val 1#8) ∉ AbstractConstant.γ upToZero8 := by
   simp [upToZero8, AbstractConstant.mem_γ_upTo]
+
+/-- The constant domain compares runtime values of every kind. -/
+example : (RuntimeValue.reg ⟨5#64⟩ == RuntimeValue.reg ⟨5#64⟩) = true := by decide
