@@ -9,6 +9,10 @@ namespace Veir
 namespace SparseConstantPropagation
 
 instance : SparseFactSpec .sparseConstant AbstractConstant where
+  Metadata := Option OpCode
+  metadataOfResult op
+    | .exact _ | .upTo _ => some op
+    | _ => none
   payloadEq := rfl
 
 def kind : AnalysisKind :=
@@ -40,9 +44,9 @@ def evaluateExact
   let resultTypes := op.getResultTypes! irCtx.raw
   match foldEvaluate opType (op.getProperties! irCtx.raw opType) resultTypes values with
   | .ok results => some (results.map AbstractConstant.exact)
-  | .ub => some (resultTypes.map fun type =>
+  | .ub _ => some (resultTypes.map fun type =>
       (RuntimeValue.getPoisonForType type).map AbstractConstant.exact |>.getD ⊤)
-  | .fail => none
+  | .fail _ => none
 
 /--
 Transfer function for operands whose facts pin their values down, or say

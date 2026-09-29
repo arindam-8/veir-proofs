@@ -53,8 +53,29 @@ instance [ErrorE -< E] : MonadLift Option (CTree E C) where
 
 instance [ErrorE -< E] [UBE -< E] : MonadLift Interp (CTree E C) where
   monadLift
-    | .ub => ub
-    | .fail => fail
+    | .ub _ => ub
+    | .fail _ => fail
     | .ok v => return v
+
+/--
+A `PureOrErr` CTree has a finite depth, and no visible effect except for failure or UB.
+-/
+inductive PureOrErr {EIn CIn R} {E : EIn → Type} {C : CIn → Type}
+    [ErrorE -< E] [UBE -< E] :
+  CTree E C R → Prop where
+| ret (r : R) : PureOrErr (CTree.ret r)
+| tau (c : C1In ⊕ CIn) k : (forall x, PureOrErr (k x)) → PureOrErr (CTree.tauG c k)
+| fail {k} : PureOrErr (CTree.vis (Subeffect.mapEff ErrorE E ErrorEIn.mk) k)
+| ub {k} : PureOrErr (CTree.vis (Subeffect.mapEff UBE E UBEIn.mk) k)
+
+attribute [simp, grind .] PureOrErr.tau PureOrErr.ret PureOrErr.fail PureOrErr.ub
+
+theorem PureOrErr.bind {EIn CIn X Y} {E : EIn → Type} {C : CIn → Type}
+    [ErrorE -< E] [UBE -< E] (t : CTree E C Y) (k : Y → CTree E C X) :
+  PureOrErr t →
+  (forall x, PureOrErr (k x)) →
+  PureOrErr (Bind.bind t k) := by
+  intros ht
+  induction ht <;> grind
 
 end Veir

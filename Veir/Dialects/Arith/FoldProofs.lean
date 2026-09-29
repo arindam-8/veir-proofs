@@ -5,7 +5,7 @@ public import Veir.Interfaces.FoldSoundness
 import all Veir.Dialects.Arith.OpInfo
 import all Veir.Data.LLVM.Int.Basic
 import all Veir.Interpreter.Basic
-import all Veir.RuntimeValue.Basic
+import all Veir.Interpreter.RuntimeValue.Basic
 import all Veir.GlobalOpInfo
 import Veir.Interpreter.Refinement.Lemmas
 

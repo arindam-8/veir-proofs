@@ -94,8 +94,8 @@ theorem ofFoldDecision_soundFor
     (hDecision : decision.SoundFor operands outcome i) :
     (AbstractConstant.ofFoldDecision decision facts).SoundFor outcome i := by
   cases outcome with
-  | fail => trivial
-  | ub => trivial
+  | fail _ => trivial
+  | ub _ => trivial
   | ok results =>
     simp only [AbstractConstant.SoundFor]
     simp only [FoldDecision.SoundFor] at hDecision
@@ -160,8 +160,8 @@ theorem evaluateExact_sound
     cases hRun : foldEvaluate (op.getOpType! irCtx.raw)
         (op.getProperties! irCtx.raw (op.getOpType! irCtx.raw)) (op.getResultTypes! irCtx.raw)
         values with
-    | fail => simp [hRun] at hEval
-    | ub =>
+    | fail _ => simp [hRun] at hEval
+    | ub _ =>
       rw [interpretPure_of_foldEvaluate_ub hRun]
       exact AbstractConstant.soundFor_ub _ i
     | ok rs =>
@@ -240,8 +240,8 @@ theorem transferExact_sound
       ne_eq]
     cases interpretOp' (op.getOpType! irCtx.raw) (op.getProperties! irCtx.raw (op.getOpType! irCtx.raw))
         (op.getResultTypes! irCtx.raw) #[] #[] MemoryState.empty with
-    | fail => exact AbstractConstant.soundFor_fail _ i
-    | ub => exact AbstractConstant.soundFor_ub _ i
+    | fail _ => exact AbstractConstant.soundFor_fail _ i
+    | ub _ => exact AbstractConstant.soundFor_ub _ i
     | ok triple =>
       obtain ⟨results, _, action⟩ := triple
       cases action with

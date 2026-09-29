@@ -12,19 +12,31 @@ motivated stating soundness up to refinement.
 
 open Veir
 
-private def constInt (bitwidth : Nat) (value : Int) : AbstractConstant :=
-  .exact (.int bitwidth (Data.LLVM.Int.constant bitwidth value))
+private def state
+    (latticeElement : AbstractConstant)
+    (opCode : Option OpCode := none) : SparsePayload AbstractConstant (Option OpCode) :=
+  { latticeElement, metadata := opCode }
 
-private def poisonInt (bitwidth : Nat) : AbstractConstant :=
-  .exact (.int bitwidth .poison)
+private def constInt (bitwidth : Nat) (value : Int)
+    (opCode : OpCode := .arith .constant) : SparsePayload AbstractConstant (Option OpCode) :=
+  state (.exact (.int bitwidth (Data.LLVM.Int.constant bitwidth value))) (some opCode)
 
-private def upToInt (bitwidth : Nat) (value : Int) : AbstractConstant :=
-  .upTo (.int bitwidth (Data.LLVM.Int.constant bitwidth value))
+private def poisonInt (bitwidth : Nat) (opCode : OpCode) :
+    SparsePayload AbstractConstant (Option OpCode) :=
+  state (.exact (.int bitwidth .poison)) (some opCode)
 
-private def run (mlir : String) (expected : Array (String × AbstractConstant)) : String :=
+private def upToInt (bitwidth : Nat) (value : Int) (opCode : Option OpCode) :
+    SparsePayload AbstractConstant (Option OpCode) :=
+  state (.upTo (.int bitwidth (Data.LLVM.Int.constant bitwidth value))) opCode
+
+private def unknown : SparsePayload AbstractConstant (Option OpCode) :=
+  state ⊤
+
+private def run (mlir : String)
+    (expected : Array (String × SparsePayload AbstractConstant (Option OpCode))) : String :=
   runWithAnalyses mlir #[Veir.SparseConstantPropagationAnalysis]
-    (fun top dfCtx parserState => Id.run do
-      match recoverNames top parserState.ctx mlir with
+    (fun top dfCtx ctx => Id.run do
+      match recoverNames top ctx mlir with
       | .error err => return #[err]
       | .ok recovered => checkNamedConstants dfCtx recovered.values expected)
 
@@ -37,7 +49,7 @@ private def testWellDefinedDivisionFolds : String :=
   %b = "arith.constant"() <{ value = 2 : i32 }> : () -> i32
   %d = "arith.divui"(%a, %b) : (i32, i32) -> i32
 }) : () -> ()"#
-    #[ ("a", constInt 32 10), ("b", constInt 32 2), ("d", constInt 32 5) ]
+    #[ ("a", constInt 32 10), ("b", constInt 32 2), ("d", constInt 32 5 (.arith .divui)) ]
 
 /--
 info: "ok"
@@ -58,7 +70,7 @@ private def testDivisionByZeroFoldsToPoison : String :=
   %z = "arith.constant"() <{ value = 0 : i32 }> : () -> i32
   %d = "arith.divui"(%a, %z) : (i32, i32) -> i32
 }) : () -> ()"#
-    #[ ("a", constInt 32 10), ("z", constInt 32 0), ("d", poisonInt 32) ]
+    #[ ("a", constInt 32 10), ("z", constInt 32 0), ("d", poisonInt 32 (.arith .divui)) ]
 
 /--
 info: "ok"
@@ -75,7 +87,7 @@ private def testAddZeroUsesOperand : String :=
   %z = "arith.constant"() <{ value = 0 : i32 }> : () -> i32
   %s = "arith.addi"(%a, %z) : (i32, i32) -> i32
 }) : () -> ()"#
-    #[ ("a", constInt 32 7), ("z", constInt 32 0), ("s", constInt 32 7) ]
+    #[ ("a", constInt 32 7), ("z", constInt 32 0), ("s", constInt 32 7 (.arith .addi)) ]
 
 /--
 info: "ok"
@@ -99,7 +111,8 @@ private def testAddUIExtendedZeroClearsCarry : String :=
     "func.return"() : () -> ()
   }) : () -> ()
 }) : () -> ()"#
-    #[ ("x", ⊤), ("z", constInt 8 0), ("s", ⊤), ("c", upToInt 1 0) ]
+    #[ ("x", unknown), ("z", constInt 8 0), ("s", unknown),
+       ("c", upToInt 1 0 (some (.arith .addui_extended))) ]
 
 /--
 info: "ok"
@@ -126,7 +139,8 @@ private def testUpToFromJoinWithPoison : String :=
   %next = "arith.addi"(%joined, %one) : (i32, i32) -> i32
   %frozen = "llvm.freeze"(%joined) : (i32) -> i32
 }) : () -> ()"#
-    #[ ("joined", upToInt 32 5), ("next", upToInt 32 6), ("frozen", ⊤) ]
+    #[ ("joined", upToInt 32 5 none), ("next", upToInt 32 6 (some (.arith .addi))),
+       ("frozen", unknown) ]
 
 /--
 info: "ok"
@@ -147,7 +161,8 @@ private def testFreezeOfExactIsExact : String :=
   %poison = "llvm.mlir.poison"() : () -> i32
   %frozenPoison = "llvm.freeze"(%poison) : (i32) -> i32
 }) : () -> ()"#
-    #[ ("frozen", constInt 32 5), ("frozenPoison", constInt 32 0) ]
+    #[ ("frozen", constInt 32 5 (.llvm .freeze)),
+       ("frozenPoison", constInt 32 0 (.llvm .freeze)) ]
 
 /--
 info: "ok"
@@ -178,7 +193,7 @@ example : RuntimeValue.int 8 (.val 1#8) ∉ AbstractConstant.γ upToZero8 := by
 example : (AbstractConstant.exact (.byte 8 Data.LLVM.Byte.allPoison)).weaken = ⊤ := rfl
 
 /-- A folded pointer may really be the poison pointer. -/
-example : (AbstractConstant.exact (.addr (.val 16))).weaken = .upTo (.addr (.val 16)) := by
+example : (AbstractConstant.exact (.addr (.val ⟨0, 16⟩))).weaken = .upTo (.addr (.val ⟨0, 16⟩)) := by
   simp [AbstractConstant.weaken, RuntimeValue.isByte, RuntimeValue.poisonOf]
 
 /-- Registers and floats have no poison: a folded one stays exact. -/

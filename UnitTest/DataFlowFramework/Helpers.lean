@@ -1,11 +1,11 @@
 import Veir.Analysis.DataFlow.DeadCodeAnalysis
 import Veir.Analysis.DataFlow.SparseFact
 import Veir.Analysis.DataFlow.SparseConstantPropagationAnalysis
-import Veir.Parser.MlirParser
+import Veir.Input
 
 open Std (HashMap)
 open Veir
-open Veir.Parser
+open Veir.Input
 
 /--
 Human readable mismatches collected by a dataflow test.
@@ -20,17 +20,6 @@ def renderReport (report : MismatchReport) : String :=
     "ok"
   else
     "mismatches:\n" ++ String.intercalate "\n" report.toList
-
-/--
-Parse one top level MLIR operation together with the parser state that owns its IR context.
--/
-def parseTopLevelOp (s : String) : Except String (OperationPtr × MlirParserState OpCode) := do
-  let some (ctx, _) := WfIRContext.create OpCode
-    | throw "internal error: failed to create IR context"
-  let parserState ← (ParserState.fromInput s.toByteArray).mapError toString
-  let (op, mlirState, _) ←
-    (Veir.Parser.parseTopLevelOp.run (MlirParserState.fromContext ctx) parserState).mapError toString
-  pure (op, mlirState)
 
 /--
 Recover textual block labels such as `^bb0` from an MLIR snippet string.
@@ -159,28 +148,35 @@ render any test mismatches produced by `check`.
 def runWithAnalyses
     (mlir : String)
     (analyses : Array DataFlowAnalysis)
-    (check : OperationPtr -> DataFlowContext -> MlirParserState OpCode -> MismatchReport) :
+    (check : OperationPtr -> DataFlowContext -> WfIRContext OpCode -> MismatchReport) :
     String := Id.run do
-  match parseTopLevelOp mlir with
+  -- TODO: Use valid IR for DataFlow unit tests.
+  match parseSourceString mlir.toUTF8 (verifyAfterParse := false) with
   | .error err =>
       return s!"parse failed: {err}"
-  | .ok (top, parserState) =>
-      let some dfCtx := fixpointSolve top analyses parserState.ctx
+  | .ok (ctx, top, _) =>
+      let some dfCtx := fixpointSolve top analyses ctx
         | return "analysis did not converge"
-      return renderReport (check top dfCtx parserState)
+      return renderReport (check top dfCtx ctx)
 
 def checkNamedConstants
     (dfCtx : DataFlowContext)
     (valueDefs : HashMap String ValuePtr)
-    (expected : Array (String × AbstractConstant)) : MismatchReport := Id.run do
+    (expected : Array (String × SparsePayload AbstractConstant (Option OpCode))) :
+    MismatchReport := Id.run do
   let mut report := #[]
   for (name, expectedValue) in expected do
     let some value := valueDefs[name]? |
       report := report.push s!"constant {name}: missing value definition"
       continue
-    let observedValue :=
-      SparseFact.getElement .sparseConstant value dfCtx
-    if observedValue != expectedValue then
-      report := report.push
-        s!"constant {name}: expected {expectedValue}, observed {observedValue}"
+    let observedValue : SparsePayload AbstractConstant (Option OpCode) :=
+      match dfCtx.getFact? .sparseConstant (.ValuePtr value) with
+      | some state => state.payload
+      | none => { latticeElement := ⊥, metadata := default }
+    if observedValue.latticeElement != expectedValue.latticeElement ||
+        observedValue.metadata != expectedValue.metadata then
+      report := report.push <|
+        s!"constant {name}: expected " ++
+        s!"({expectedValue.latticeElement}, {repr expectedValue.metadata}), " ++
+        s!"observed ({observedValue.latticeElement}, {repr observedValue.metadata})"
   report

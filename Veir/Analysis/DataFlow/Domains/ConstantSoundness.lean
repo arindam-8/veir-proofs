@@ -133,15 +133,15 @@ def SoundFor (a : AbstractConstant) (outcome : Interp (Array RuntimeValue)) (i :
       match results[i]? with
       | some actual => actual ∈ γ a
       | none => True
-  | .ub => True
-  | .fail => True
+  | .ub _ => True
+  | .fail _ => True
 
 @[simp]
 theorem soundFor_top (outcome : Interp (Array RuntimeValue)) (i : Nat) :
     SoundFor ⊤ outcome i := by
   cases outcome with
-  | fail => trivial
-  | ub => trivial
+  | fail _ => trivial
+  | ub _ => trivial
   | ok results =>
       simp only [SoundFor]
       cases results[i]? with
@@ -149,21 +149,21 @@ theorem soundFor_top (outcome : Interp (Array RuntimeValue)) (i : Nat) :
       | some actual => exact mem_γ_top actual
 
 @[simp]
-theorem soundFor_ub (a : AbstractConstant) (i : Nat) :
-    SoundFor a .ub i := by
+theorem soundFor_ub (a : AbstractConstant) (i : Nat) {op : Option OperationPtr} :
+    SoundFor a (.ub op) i := by
   unfold SoundFor; trivial
 
 @[simp]
-theorem soundFor_fail (a : AbstractConstant) (i : Nat) :
-    SoundFor a .fail i := by
+theorem soundFor_fail (a : AbstractConstant) (i : Nat) {op : Option OperationPtr} :
+    SoundFor a (.fail op) i := by
   unfold SoundFor; trivial
 
 /-- A sound fact stays sound when weakened up the lattice. -/
 theorem soundFor_mono (a b : AbstractConstant) (outcome : Interp (Array RuntimeValue)) (i : Nat)
     (hab : a ≤ b) : SoundFor a outcome i → SoundFor b outcome i := by
   cases outcome with
-  | fail => intro _; trivial
-  | ub => intro _; trivial
+  | fail _ => intro _; trivial
+  | ub _ => intro _; trivial
   | ok results =>
       simp only [SoundFor]
       cases results[i]? with

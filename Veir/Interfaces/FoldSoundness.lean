@@ -67,8 +67,8 @@ def FoldDecision.SoundFor (decision : FoldDecision) (operands : Array RuntimeVal
       match results[i]? with
       | some actual => ∃ claimed, decision.valueFor operands = some claimed ∧ actual ⊒ claimed
       | none => True
-  | .ub => True
-  | .fail => True
+  | .ub _ => True
+  | .fail _ => True
 
 /-- An integer poison is refined by every integer of its width. -/
 theorem RuntimeValue.int_poison_isRefinedBy (w : Nat) (x : Data.LLVM.Int w) :
@@ -77,12 +77,12 @@ theorem RuntimeValue.int_poison_isRefinedBy (w : Nat) (x : Data.LLVM.Int w) :
 
 @[simp]
 theorem FoldDecision.soundFor_ub (decision : FoldDecision) (operands : Array RuntimeValue)
-    (i : Nat) : decision.SoundFor operands .ub i := by
+    (i : Nat) {op : Option OperationPtr} : decision.SoundFor operands (.ub op) i := by
   simp [FoldDecision.SoundFor]
 
 @[simp]
 theorem FoldDecision.soundFor_fail (decision : FoldDecision) (operands : Array RuntimeValue)
-    (i : Nat) : decision.SoundFor operands .fail i := by
+    (i : Nat) {op : Option OperationPtr} : decision.SoundFor operands (.fail op) i := by
   simp [FoldDecision.SoundFor]
 
 /-- A successful `mapM` in `Option` computes each entry by `f`. -/
@@ -174,24 +174,24 @@ theorem interpretPure_of_foldEvaluate_ok {opType : OpCode} {properties : propert
   · simp [liftM, monadLift, MonadLift.monadLift] at h
   · simp only [interpretPure]
     cases hInterp : interpretOp' opType properties resultTypes operands #[] MemoryState.empty with
-    | fail => simp [hInterp, bind] at h
-    | ub => simp [hInterp, bind] at h
+    | fail _ => simp [hInterp, bind] at h
+    | ub _ => simp [hInterp, bind] at h
     | ok triple =>
       obtain ⟨rs, mem, action⟩ := triple
       cases action <;> simp_all [bind, liftM, monadLift, MonadLift.monadLift]
 
 /-- `foldEvaluate` reports UB only when the empty-memory interpretation does. -/
 theorem interpretPure_of_foldEvaluate_ub {opType : OpCode} {properties : propertiesOf opType}
-    {resultTypes : Array TypeAttr} {operands : Array RuntimeValue}
-    (h : foldEvaluate opType properties resultTypes operands = .ub) :
-    interpretPure opType properties resultTypes operands = .ub := by
+    {resultTypes : Array TypeAttr} {operands : Array RuntimeValue} {op : Option OperationPtr}
+    (h : foldEvaluate opType properties resultTypes operands = .ub op) :
+    interpretPure opType properties resultTypes operands = .ub op := by
   simp only [foldEvaluate] at h
   split at h
   · simp [liftM, monadLift, MonadLift.monadLift] at h
   · simp only [interpretPure]
     cases hInterp : interpretOp' opType properties resultTypes operands #[] MemoryState.empty with
-    | fail => simp [hInterp, bind] at h
-    | ub => rfl
+    | fail _ => simp [hInterp, bind] at h
+    | ub _ => simp_all [bind]
     | ok triple =>
       obtain ⟨rs, mem, action⟩ := triple
       cases action <;> simp_all [bind, liftM, monadLift, MonadLift.monadLift]
@@ -214,8 +214,8 @@ private theorem foldByEvaluation_sound
     subst hEq
     simp only [hValues] at hFold
     cases hEval : foldEvaluate opType properties resultTypes values with
-    | fail => simp [hEval] at hFold
-    | ub => simp [interpretPure_of_foldEvaluate_ub hEval]
+    | fail _ => simp [hEval] at hFold
+    | ub _ => simp [interpretPure_of_foldEvaluate_ub hEval]
     | ok results =>
       simp only [hEval, pure] at hFold
       cases hFold
@@ -282,8 +282,8 @@ private theorem foldPoisonedOperand_sound
     simp only [Array.getElem?_map, Option.map_eq_some_iff] at hDecision
     obtain ⟨poison, hPoisonAt, rfl⟩ := hDecision
     cases hInterp : interpretPure opType properties resultTypes operands with
-    | fail => trivial
-    | ub => trivial
+    | fail _ => trivial
+    | ub _ => trivial
     | ok results =>
       simp only [FoldDecision.SoundFor]
       cases hResult : results[i]? with
